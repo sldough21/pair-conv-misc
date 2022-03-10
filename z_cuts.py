@@ -3,12 +3,7 @@
 # replication of zcuts
 
 def main():
-    print('Initializing code...')
-        
-    # from multiprocessing import Pool
-    from multiprocessing import Pool, freeze_support, RLock
-
-    # load tables for each one
+    print('Initializing code...')      
     
     # initialize dictionary
     all_fields = ['GDS','EGS','COS','GDN','UDS']
@@ -17,6 +12,11 @@ def main():
 
     pool = Pool()                         # Create a multiprocessing Pool
     all_data = pool.map(z_cuts, all_fields)  # process data_inputs iterable with pool
+
+    # end parallelization
+    pool.close()
+    pool.join()
+
     all_pair = []
     all_iso = []
     for i in range(0,len(all_data)):
@@ -47,8 +47,6 @@ def main():
     # calculate AGN enhancements:
     AGNfrac_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/Data_CSV/pair_AGN_frac.csv')
     isofrac_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/Data_CSV/iso_AGN_frac.csv')
-
-
 
 
 # -------------------------------------------------------------------------------------------------------------------------- #
@@ -261,6 +259,9 @@ def pair_analysis(df, iso_df):
       control_df = get_control(iso_df, bin_df)
       bin_isofrac['isofrac_in_'+name] = sum(control_df['flag_xray']) / len(control_df['flag_xray'])
       bin_all_isofrac['all_isofrac_in_'+name].append(bin_isofrac['isofrac_in_'+name])
+      #if name == 'bin5':
+      # print(control_df)
+      
 
     return bin_all_AGNfrac, bin_all_isofrac
 
@@ -272,8 +273,14 @@ def get_control(df_iso, df_agn, N_control=2, zfactor=0.2, mfactor=2):
     dz = zfactor
 	
     # create list to store control selections
-    control = []
-    control_f = []
+    #control = []
+    control_ID = []
+
+    # create a unique ID for each galaxy to make sure no duplicates are taken
+    # reset index just to be safe
+    df_iso = df_iso.reset_index(drop=True)
+    df_iso['uniq_ID'] = df_iso.index
+
     
     m_all = np.concatenate( (np.array(df_agn['mass']), np.array(df_agn['p_mass'])), axis=0 )
     z_all = np.concatenate( (np.array(df_agn['zbest']), np.array(df_agn['p_zbest'])), axis=0 )
@@ -291,7 +298,7 @@ def get_control(df_iso, df_agn, N_control=2, zfactor=0.2, mfactor=2):
      	(df_iso['mass'] >= m-np.log10(mfactor)) & (df_iso['mass'] <= m+np.log10(mfactor)) &
      	(df_iso['field'] == f) ]
 
-     iso_match = iso_match.reset_index(drop=True) 
+     #iso_match = iso_match.reset_index(drop=True) # potentially unnecessary
      
      # randomize df_iso and move through it until we have desired number of control galaxies
      iso_match = iso_match.sample(frac=1).reset_index(drop=True)
@@ -299,20 +306,19 @@ def get_control(df_iso, df_agn, N_control=2, zfactor=0.2, mfactor=2):
 
      for j in range(0, len(iso_match)):
      
-      if iso_match['ID'][j] in control and iso_match['field'][j] in control_f:
+      if iso_match['uniq_ID'][j] in control_ID:
        continue
       else:
-       control.append(iso_match['ID'][j])
-       control_f.append(iso_match['field'][j])
+       #control.append(iso_match['ID'][j])
+       control_ID.append(iso_match['uniq_ID'][j])
        mcount+=1
        
-     #if mcount < N_control:
-     # print('Not enough control galaxies for object {}!'.format(i))
-     if mcount == N_control: 
-      break
+      # print('Not enough control galaxies for object {}!'.format(i))
+      if mcount == N_control: 
+       break
       
     # return a dataframe of selected control galaxies:
-    df_control = df_iso.loc[ (df_iso['ID'].isin(control)) & (df_iso['field'].isin(control_f)) ]
+    df_control = df_iso.loc[ (df_iso['uniq_ID'].isin(control_ID)) ]
     return df_control
 
 
@@ -338,5 +344,7 @@ if __name__ == '__main__':
     from tqdm import tqdm
     import matplotlib.pyplot as plt
     import math as m
+    from multiprocessing import Pool, freeze_support, RLock
+
 
     main()
