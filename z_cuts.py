@@ -16,11 +16,44 @@ def main():
     #fields = [all_fields['GDS'],all_fields['EGS'],all_fields['COS'],all_fields['GDN'],all_fields['UDS']]
 
     pool = Pool()                         # Create a multiprocessing Pool
-    all_field_df = pool.map(z_cuts, all_fields)  # process data_inputs iterable with pool
-
+    all_data = pool.map(z_cuts, all_fields)  # process data_inputs iterable with pool
+    all_pair = []
+    all_iso = []
+    for i in range(0,len(all_data)):
+     all_pair.append(all_data[i][0])
+     all_iso.append(all_data[i][1])
+    
     print('Combining all fields...')
-    all_fields_df = pd.concat(all_field_df)
-    print(all_fields_df)
+    all_pair_df = pd.concat(all_pair)
+    all_iso_df = pd.concat(all_iso)
+    print(all_iso_df)
+    
+    print('Calculating AGN fractions...')
+
+    #lis = np.array(all_fields_df['dv_draws'])
+    #print(len(lis[0]))
+    #print(all_fields_df)
+    AGNfracs, isofracs = pair_analysis(all_pair_df, all_iso_df)
+    print('Done!')
+
+    #distr_plots(AGNfracs)
+
+    AGNfrac_df = pd.DataFrame.from_dict(AGNfracs)
+    isofrac_df = pd.DataFrame.from_dict(isofracs)
+
+    print(AGNfrac_df)
+    print(isofrac_df)
+
+    # calculate AGN enhancements:
+    AGNfrac_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/Data_CSV/pair_AGN_frac.csv')
+    isofrac_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/Data_CSV/iso_AGN_frac.csv')
+
+
+
+
+# -------------------------------------------------------------------------------------------------------------------------- #
+
+
 
 def draw_z(field, pair_df):
 
@@ -91,14 +124,15 @@ def draw_z(field, pair_df):
     return pair_df
       
 
+# -------------------------------------------------------------------------------------------------------------------------- #
+
+
+
 def z_cuts(field):
 
     from astropy.cosmology import FlatLambdaCDM
     from astropy import units as u
     from astropy.coordinates import SkyCoord
-
-    from time import sleep
-    from tqdm import tqdm
 
     print('Running z_cuts...')
     
@@ -132,11 +166,11 @@ def z_cuts(field):
     elif field == 'GDN': pos=4
     elif field == 'UDS': pos=5
     
-    pbar = tqdm(total=len(g_df['ID']), position=pos)
+    #pbar = tqdm(total=len(g_df['ID']), position=pos)
 
     for i in (range(0, len(g_df['ID']))):
     #for i in range(0,100):
-     pbar.update(1)
+     #pbar.update(1)
      R_kpc = cosmo.arcsec_per_kpc_proper(g_df['zbest'][i]) # 1 kpc = arcsec at z
      R_kpc_min = (R_kpc*d_min).value
      R_kpc_max = (R_kpc*d_max).value
@@ -153,7 +187,7 @@ def z_cuts(field):
        # g_dist = S_dist[matches[0]].sort() # I guess this was to sort by distance
        g_prime.append(i)
        g_partner.append(matches[0][j])
-       dist_part.append(S_dist[matches[0][j]]/R_kpc)
+       dist_part.append((S_dist[matches[0][j]]/R_kpc).value)
        angdist_part.append(S_dist[matches[0][j]])
 
     #print(' ', field, len(g_prime), len(dist_part))
@@ -172,13 +206,137 @@ def z_cuts(field):
     pair_df['field'] = [field]*len(pair_df['ID'])
 
     draw_z(field, pair_df)
-    
 
-    return(pair_df)
+    # prepare isolated df
+    iso_df = g_df.iloc[iso]
+    iso_df = iso_df.reset_index(drop=True)
+    iso_df['field'] = [field]*len(iso_df['ID']) 
+
+    return pair_df, iso_df
+
+# -------------------------------------------------------------------------------------------------------------------------- #
+
+def pair_analysis(df, iso_df):
+    print('in pair analysis now')
+    # change constants
+    max_merg_dist = 80
+    n_bins = 8
+    max_dv = 1000
+
+    bin_all_AGNfrac = {}
+    bin_all_isofrac = {}
+
+    # create bin sizes
+    all_bins = {}
+    for i in range(0, n_bins):
+      all_bins['bin'+str(i)] = str((max_merg_dist/n_bins)*i)+'-'+str((max_merg_dist/n_bins)+(max_merg_dist/n_bins)*i)
+      bin_all_AGNfrac['all_AGNfrac_in_bin'+str(i)] = []
+      bin_all_isofrac['all_isofrac_in_bin'+str(i)] = []
+
+    
+    lis = np.array(df['dv_draws'])
+    for it in tqdm(range(0,len(lis[0]))):
+     #print(it)
+     
+     bin_AGN = {}
+     bin_AGNfrac = {}
+     bin_isofrac = {}
+     # create AGN dictionary for bins:
+     for name in all_bins:
+      
+      info = all_bins[name].split('-')
+      low = float(info[0])
+      high = float(info[1])
+
+      df['current_dv'] = df.dv_draws.apply(lambda x: x[it])
+        
+      #print(df['current_dv'])
+
+      bin_df = df[ (df['dist_kpc'] > low) & (df['dist_kpc'] <= high) & (df['current_dv'] < max_dv) ]
+      bin_AGN['AGN_in_'+name] = np.concatenate( (np.array(bin_df['flag_xray']), np.array(bin_df['p_flag_xray'])), axis=0)
+      bin_AGNfrac['AGNfrac_in_'+name] = sum(bin_AGN['AGN_in_'+name]) / len(bin_AGN['AGN_in_'+name])
+      bin_all_AGNfrac['all_AGNfrac_in_'+name].append(bin_AGNfrac['AGNfrac_in_'+name])
+
+      # select control galaxies from bin_df, which holds the dataframe for pairs at the current iteration in a single bin
+      control_df = get_control(iso_df, bin_df)
+      bin_isofrac['isofrac_in_'+name] = sum(control_df['flag_xray']) / len(control_df['flag_xray'])
+      bin_all_isofrac['all_isofrac_in_'+name].append(bin_isofrac['isofrac_in_'+name])
+
+    return bin_all_AGNfrac, bin_all_isofrac
+
+
+# -------------------------------------------------------------------------------------------------------------------------- #
+
+def get_control(df_iso, df_agn, N_control=2, zfactor=0.2, mfactor=2):
+	
+    dz = zfactor
+	
+    # create list to store control selections
+    control = []
+    control_f = []
+    
+    m_all = np.concatenate( (np.array(df_agn['mass']), np.array(df_agn['p_mass'])), axis=0 )
+    z_all = np.concatenate( (np.array(df_agn['zbest']), np.array(df_agn['p_zbest'])), axis=0 )
+    f_all = np.concatenate( (np.array(df_agn['field']), np.array(df_agn['field'])), axis=0 )
+    
+    for i in range(0, len(m_all)):
+     m = m_all[i] # if possible, this is where I would need to keep track of mass(z)
+     z = z_all[i] # so this is where I would need to keep track of the drawn z's... just continue as is for now...
+     f = f_all[i]
+     zmin = z - dz
+     zmax = z + dz
+     
+     # create a dataframe for possible matches
+     iso_match = df_iso[ (df_iso['zbest'] >= zmin) & (df_iso['zbest'] <= zmax) & 
+     	(df_iso['mass'] >= m-np.log10(mfactor)) & (df_iso['mass'] <= m+np.log10(mfactor)) &
+     	(df_iso['field'] == f) ]
+
+     iso_match = iso_match.reset_index(drop=True) 
+     
+     # randomize df_iso and move through it until we have desired number of control galaxies
+     iso_match = iso_match.sample(frac=1).reset_index(drop=True)
+     mcount = 0
+
+     for j in range(0, len(iso_match)):
+     
+      if iso_match['ID'][j] in control and iso_match['field'][j] in control_f:
+       continue
+      else:
+       control.append(iso_match['ID'][j])
+       control_f.append(iso_match['field'][j])
+       mcount+=1
+       
+     #if mcount < N_control:
+     # print('Not enough control galaxies for object {}!'.format(i))
+     if mcount == N_control: 
+      break
+      
+    # return a dataframe of selected control galaxies:
+    df_control = df_iso.loc[ (df_iso['ID'].isin(control)) & (df_iso['field'].isin(control_f)) ]
+    return df_control
+
+
+# -------------------------------------------------------------------------------------------------------------------------- #
+
+
+def distr_plots(all_bin_dict):
+    #fig, ax = plt.figure()
+    for name in all_bin_dict:
+     plt.hist(all_bin_dict[name], density=True, histtype='step', label=name)
+    plt.legend()
+    plt.show()
+
+
+# -------------------------------------------------------------------------------------------------------------------------- #
 
 
 
 if __name__ == '__main__':
     import pandas as pd
     import numpy as np
+    from time import sleep
+    from tqdm import tqdm
+    import matplotlib.pyplot as plt
+    import math as m
+
     main()
