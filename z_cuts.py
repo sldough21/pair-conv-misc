@@ -33,6 +33,10 @@ def main():
     #lis = np.array(all_fields_df['dv_draws'])
     #print(len(lis[0]))
     #print(all_fields_df)
+
+    all_pair_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/Data_CSV/all_pair_df.csv')
+    all_iso_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/Data_CSV/all_iso_df.csv')
+
     AGNfracs, isofracs = pair_analysis(all_pair_df, all_iso_df)
     print('Done!')
 
@@ -151,7 +155,7 @@ def z_cuts(field):
     angdist_part = []
     iso = []
 
-    cosmo = FlatLambdaCDM(H0=70, Om0=0.3, Tcmb0=2.725)
+    cosmo = FlatLambdaCDM(H0=70, Om0=0.3, Tcmb0=2.725) # 0.7 for omega
 
     d_min = 4.0 #kpc
     d_max = 80.0 #kpc
