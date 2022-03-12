@@ -19,12 +19,20 @@ from numpy import random
 
 PATH = '/nobackup/c1029594/CANDELS_AGN_merger_data/Data_CSV/'
 
+cosmo = FlatLambdaCDM(H0=70, Om0=0.3, Tcmb0=2.725) # 0.7 for omega
+# determine conservative ang separation correspondong to 150 kpc at z = 0.5
+R_kpc = cosmo.arcsec_per_kpc_proper(0.5) # arcsec/kpc at z=0.5
+max_R_kpc = (150 * R_kpc).value # in arcseconds
+
+
 def main():
     
     print('beginning main()')
     
     # we want to parallelize the data by fields, so:
-    all_fields = ['GDS','EGS','COS','GDN','UDS']
+    all_fields = ['GDS']#,'EGS','COS','GDN','UDS']
+    
+    
     # Create a multiprocessing Pool
     pool = Pool()  
     # process fields iterable with pool -> parallelize code by field
@@ -49,17 +57,22 @@ def process_samples(field):
     # check that IDs are consistent then drop IDs
     df = df.drop(['id2'], axis=1)
     
-    # make initial galaxy cuts based on PDF range
+    # make initial galaxy cuts based on PDF range ### check for spec z's and count them ###
     df = df[ (df['zlo'] <= 3.0) & (df['zhi'] >= 0.5) & (df['class_star'] < 0.9) & (df['photflag'] == 0) ]
     # reset index
     df = df.reset_index(drop=True)
     
-    # draw 1000 galaxies for each galaxy
+    # draw 1000 galaxies for each galaxy and calculate Lx(z) and M(z)
     draw_df = draw_z(df, field)
-    print(draw_df)
+    
+    # loop through number of iterations:
+    for it in range(0, len(draw_df)):
+        
+        # calculate separation and delta V
+        results = determine_pairs(df, draw_df.iloc[it], 'phot-z')
     
 
-def draw_z(df, field): # <10 min for one field
+def draw_z(df, field): # <20 min for one field
     print('Running draw_z for {}'.format(field))
     
     # initialize dictionary
@@ -90,19 +103,58 @@ def draw_z(df, field): # <10 min for one field
                                                   'Wuyts', 'HB4', 'mFDa4'], delimiter=' ')
 
         # draw the samples
-        n = 1000 # number of draws
+        n = 10 # number of draws
         sum1 = np.sum(pdf1['HB4'])
      
         draw1 = random.choice(pdf1['z'], size=n, p=(pdf1['HB4']/sum1))
+        
+        # this is also where you could calculate Lx(z) and M(z)...
         
         # add entry into dictionary
         draw_dict['gal_'+str(ID_str)+'_z'] = draw1
     
     # convert dictionary to dataframe with gal ID as columns and redshift selections are rows
-    draw_df = pd.from_dict(draw_dict)
+    draw_df = pd.DataFrame.from_dict(draw_dict)
     
     return draw_df
 
+
+def determine_pairs(all_df, current_zdraw_df, z_type):
+    if z_type == 'phot-z':
+        # if we are choosing just photo-z's, stick with the draws
+        # add current z to the all_df dataframe, but first check for consistent lengths:
+        z_drawn = current_zdraw_df.to_numpy()
+        print('checking length of drawn z list')
+        all_df['drawn_z'] = z_drawn
+        
+    #elif z_type == 'spec-z':
+        
+    #elif z_type == 'both':
+    
+    # make definite redshift cut:
+    all_df = all_df[ (all_df['drawn_z'] >= 0.5) & (all_df['drawn_z'] <= 3.0) ]
+    
+    # match catalogs:
+    df_pos = SkyCoord(all_df['RAdeg'],all_df['DEdeg'],unit='deg')
+    idxc, idxcatalog, d2d, d3d = df_pos.search_around_sky(df_pos, max_R_kpc*u.arcsec)
+    # idxc is INDEX of the item being searched around
+    # idxcatalog is INDEX of all galaxies within arcsec
+    # d2d is the arcsec differece
+    # place galaxy pairs into a df and get rid of duplicate pairs:
+    matches = {'prime_index':idxc, 'partner_index':idxcatalog, 'arc_sep': d2d.arcsecond}
+    match_df = pd.DataFrame(matches)
+    pair_df = match_df.drop(match_df.index[match_df['arc_sep'] == 0.00])
+    iso_df = match_df.drop(match_df.index[match_df['arc_sep'] != 0.00])
+    print(len(pair_df), len(iso_df))
+    
+    
+    # iso galaxies where an ID only has one match, so two issues here:
+    # 1) how to sort confidently isolated and potential pair DFs - done
+    # 2) how to weed out inverse duplicates - hmm could make new column into string and switch order and limit duplicates...
+    #      ... how to do all this without a for loop
+    #      ... number of potential pairs is still so so high, need to cut inverse duplicates and calculate kpc dist based on z
+        
+    
 
 
 if __name__ == '__main__':
