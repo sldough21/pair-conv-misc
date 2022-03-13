@@ -19,10 +19,10 @@ from numpy import random
 
 PATH = '/nobackup/c1029594/CANDELS_AGN_merger_data/Data_CSV/'
 
-cosmo = FlatLambdaCDM(H0=70, Om0=0.3, Tcmb0=2.725) # 0.7 for omega
+cosmo = FlatLambdaCDM(H0=70 * u.km / u.s / u.Mpc, Tcmb0=2.725 * u.K, Om0=0.3) # 0.7 for omega
 # determine conservative ang separation correspondong to 150 kpc at z = 0.5
 R_kpc = cosmo.arcsec_per_kpc_proper(0.5) # arcsec/kpc at z=0.5
-max_R_kpc = (150 * R_kpc).value # in arcseconds
+max_R_kpc = (150*u.kpc * R_kpc) # in arcseconds ### this is the bug right here
 
 
 def main():
@@ -34,14 +34,19 @@ def main():
     
     
     # Create a multiprocessing Pool
-    pool = Pool()  
-    # process fields iterable with pool -> parallelize code by field
-    all_data = pool.map(process_samples, all_fields)
-    # close pool
-    pool.close()
-    pool.join()
+    # pool = Pool()  
+    # # process fields iterable with pool -> parallelize code by field
+    # all_data = pool.map(process_samples, all_fields)
+    # # close pool
+    # pool.close()
+    # pool.join()
     
+    # for now, run things without pooling -> easier to read errors
+    process_samples('GDS')
+    
+# -------------------------------------------------------------------------------------------------------------------------- #
 
+    
 def process_samples(field):
     # this is essentially the main function but for each field, to be combined and saved as csv's upon completion
     print('beginning process_samples() for {}'.format(field))
@@ -57,26 +62,36 @@ def process_samples(field):
     # check that IDs are consistent then drop IDs
     df = df.drop(['id2'], axis=1)
     
-    # make initial galaxy cuts based on PDF range ### check for spec z's and count them ###
+    # make initial galaxy cuts based on PDF range
     df = df[ (df['zlo'] <= 3.0) & (df['zhi'] >= 0.5) & (df['class_star'] < 0.9) & (df['photflag'] == 0) ]
+    # check for the spec-z exception and count:
+    print('number of gals with zspec outside redshift range:', len( df[ ((df['zspec'] > 3)) | ((df['zspec'] < 0.5) & (df['zspec'] > 0)) ]) )
+    
     # reset index
     df = df.reset_index(drop=True)
     
+    ##### SMALLER SAMPLE SIZE FOR TEST #####
+    df = df.iloc[0:100]
+    
     # draw 1000 galaxies for each galaxy and calculate Lx(z) and M(z)
-    draw_df = draw_z(df, field)
+    draw_df_z, draw_df_M, draw_df_LX = draw_z(df, field)
     
     # loop through number of iterations:
-    for it in range(0, len(draw_df)):
+    for it in range(0, len(draw_df_z)):
         
-        # calculate separation and delta V
-        results = determine_pairs(df, draw_df.iloc[it], 'phot-z')
+        # calculate separation and delta V ----> might not need LX drop for this step... we'll see
+        results = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'phot-z')
     
+# -------------------------------------------------------------------------------------------------------------------------- #
 
+    
 def draw_z(df, field): # <20 min for one field
     print('Running draw_z for {}'.format(field))
     
     # initialize dictionary
-    draw_dict = {}
+    draw_z = {}
+    draw_M = {}
+    draw_LX = {}
     
     for i in tqdm(range(0, len(df['ID']))):
         # load PDFs based on string ID
@@ -103,29 +118,42 @@ def draw_z(df, field): # <20 min for one field
                                                   'Wuyts', 'HB4', 'mFDa4'], delimiter=' ')
 
         # draw the samples
-        n = 10 # number of draws
+        n = 5 # number of draws
         sum1 = np.sum(pdf1['HB4'])
      
         draw1 = random.choice(pdf1['z'], size=n, p=(pdf1['HB4']/sum1))
         
         # this is also where you could calculate Lx(z) and M(z)...
+        Mz = [np.array(df['mass'][i])] * n
+        LXz = [np.array(df['LX'][i])] * n
         
         # add entry into dictionary
-        draw_dict['gal_'+str(ID_str)+'_z'] = draw1
+        draw_z['gal_'+str(ID_str)+'_z'] = draw1
+        draw_M['gal_'+str(ID_str)+'_M'] = Mz
+        draw_LX['gal_'+str(ID_str)+'_LX'] = LXz
     
     # convert dictionary to dataframe with gal ID as columns and redshift selections are rows
-    draw_df = pd.DataFrame.from_dict(draw_dict)
+    draw_df_z = pd.DataFrame.from_dict(draw_z)
+    draw_df_M = pd.DataFrame.from_dict(draw_M)
+    draw_df_LX = pd.DataFrame.from_dict(draw_LX)
     
-    return draw_df
+    return draw_df_z, draw_df_M, draw_df_LX
 
 
-def determine_pairs(all_df, current_zdraw_df, z_type):
+# -------------------------------------------------------------------------------------------------------------------------- #
+
+
+def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_df, z_type):
     if z_type == 'phot-z':
         # if we are choosing just photo-z's, stick with the draws
         # add current z to the all_df dataframe, but first check for consistent lengths:
         z_drawn = current_zdraw_df.to_numpy()
+        M_drawn = current_Mdraw_df.to_numpy()
+        LX_drawn = current_LXdraw_df.to_numpy()
         print('checking length of drawn z list')
         all_df['drawn_z'] = z_drawn
+        all_df['drawn_M'] = M_drawn
+        all_df['drawn_LX'] = LX_drawn
         
     #elif z_type == 'spec-z':
         
@@ -136,25 +164,95 @@ def determine_pairs(all_df, current_zdraw_df, z_type):
     
     # match catalogs:
     df_pos = SkyCoord(all_df['RAdeg'],all_df['DEdeg'],unit='deg')
-    idxc, idxcatalog, d2d, d3d = df_pos.search_around_sky(df_pos, max_R_kpc*u.arcsec)
+    idxc, idxcatalog, d2d, d3d = df_pos.search_around_sky(df_pos, max_R_kpc)
     # idxc is INDEX of the item being searched around
     # idxcatalog is INDEX of all galaxies within arcsec
     # d2d is the arcsec differece
+    
     # place galaxy pairs into a df and get rid of duplicate pairs:
     matches = {'prime_index':idxc, 'partner_index':idxcatalog, 'arc_sep': d2d.arcsecond}
     match_df = pd.DataFrame(matches)
-    pair_df = match_df.drop(match_df.index[match_df['arc_sep'] == 0.00])
-    iso_df = match_df.drop(match_df.index[match_df['arc_sep'] != 0.00])
-    print(len(pair_df), len(iso_df))
+    pair_df = match_df[ (match_df['arc_sep'] != 0.00) ]
+    # get rid of inverse row pairs with mass ratio
+    pair_df['mass_ratio'] = np.array((all_df.iloc[pair_df['prime_index']])['drawn_M']) - np.array((all_df.iloc[pair_df['partner_index']])['drawn_M'])
+    
+    pair_df = pair_df[ (pair_df['mass_ratio'] >= 0) ] # WHY ISN'T IT EXACTLY HALF -> when it's 0 you keep the duplicate...
+    
+    iso_df = match_df[ (match_df['arc_sep'] == 0.00) ]
+    # confidently isolated galaxies only match to themselves, so get rid of ID's with other matches
+    iso_df = iso_df[ (iso_df['prime_index'].isin(pair_df['prime_index']) == False) ]
+    #print(iso_df)
+    
+    # calculate relative line of sight velocity
+    pair_df['dv'] = ( (((np.array((all_df.iloc[pair_df['prime_index']])['drawn_z'])+1)**2 -1)/((np.array((all_df.iloc[pair_df['prime_index']])['drawn_z'])+1)**2 +1)) - (((np.array((all_df.iloc[pair_df['partner_index']])['drawn_z'])+1)**2 -1)/((np.array((all_df.iloc[pair_df['partner_index']])['drawn_z'])+1)**2 +1)) ) * 2.998e5
+    
+    # calculate projected separation at z
+    #R_kpc = cosmo.arcsec_per_kpc_proper(np.array((all_df.iloc[pair_df['prime_index']])['drawn_z'])
+    pair_df['kpc_sep'] = (pair_df['arc_sep']) / cosmo.arcsec_per_kpc_proper((all_df.iloc[pair_df['prime_index']])['drawn_z'])
+    
+    true_pairs = pair_df[ (pair_df['kpc_sep'] <= 80*u.kpc) & (abs(pair_df['dv']) <= 1000) ]
+    print(true_pairs)
+    
+    # select control galaxies from iso_df ---> needs to be fixed ----> need to make sure indices are right here...
+    pair_mass = np.concatenate( (np.array(), np.array()), axis=0 )
+    pair_z = np.concatenate( (np.array(), np.array()), axis=0 )
+    iso_mass = 
+    iso_z = 
+    controls = get_control(iso_mass, iso_z, pair_mass, pair_z)
     
     
-    # iso galaxies where an ID only has one match, so two issues here:
-    # 1) how to sort confidently isolated and potential pair DFs - done
-    # 2) how to weed out inverse duplicates - hmm could make new column into string and switch order and limit duplicates...
-    #      ... how to do all this without a for loop
-    #      ... number of potential pairs is still so so high, need to cut inverse duplicates and calculate kpc dist based on z
+# -------------------------------------------------------------------------------------------------------------------------- #
+
+def get_control(control_mass, control_z, mass, redshift, N_control=2, zfactor=0.2, mfactor=2): 
+
+    dz = zfactor
+
+    # create list to store lists of control indices per prime galaxy
+    control_all = []
         
+    # create a list for all ID's to make sure there are no duplicates
+    control_dup = []
     
+    for i, (m, z) in enumerate(zip(mass, redshift)):
+        
+        control = []
+    
+        zmin = z - dz
+        zmax = z + dz
+        mmin = m-np.log10(mfactor)
+        mmax = m+np.log10(mfactor)
+     
+         # create a dataframe for possible matches
+        control_match = np.where( (control_z >= zmin) & (control_z <= zmax) & 
+                                 (control_m >= mmin) & (control_m <= mmax) )
+     
+        # randomize df_iso and move through it until we have desired number of control galaxies
+        random.shuffle(control_match)
+        mcount = 0
+
+        for j in range(0, len(control_match)):
+     
+            if control_match[j] in control_dup:
+                continue
+            else:
+                control.append(control_match[j])
+                control_dup.append(control_match[j])
+                mcount+=1
+       
+            # print('Not enough control galaxies for object {}!'.format(i))
+            if mcount == N_control: 
+                break
+                
+        if mcount < N_control:
+            print('Not enough control galaxies for object {}!'.format(i))
+            control.append(['nan']*(N_control-mcount))
+    
+        control_all.append([control])
+
+    return control_all
+
+
+# -------------------------------------------------------------------------------------------------------------------------- #
 
 
 if __name__ == '__main__':
