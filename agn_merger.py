@@ -4,6 +4,8 @@
 
 # import libraries
 import pandas as pd
+pd.options.mode.chained_assignment = None  # default='warn'
+
 import numpy as np
 from time import sleep
 from tqdm import tqdm
@@ -16,6 +18,8 @@ from astropy import units as u
 from astropy.coordinates import SkyCoord
 
 from numpy import random
+
+import matplotlib.pyplot as plt
 
 PATH = '/nobackup/c1029594/CANDELS_AGN_merger_data/Data_CSV/'
 
@@ -33,19 +37,19 @@ def main():
     print('beginning main()')
     
     # we want to parallelize the data by fields, so:
-    all_fields = ['GDS']#,'EGS','COS','GDN','UDS']
+    all_fields = ['GDS','EGS','COS','GDN','UDS']
     
     
     # Create a multiprocessing Pool
-    # pool = Pool()  
-    # # process fields iterable with pool -> parallelize code by field
-    # all_data = pool.map(process_samples, all_fields)
-    # # close pool
-    # pool.close()
-    # pool.join()
+    pool = Pool()  
+    # process fields iterable with pool -> parallelize code by field
+    all_data = pool.map(process_samples, all_fields)
+    # close pool
+    pool.close()
+    pool.join()
     
     # for now, run things without pooling -> easier to read errors
-    process_samples('GDS')
+    # process_samples('GDS')
     
 # -------------------------------------------------------------------------------------------------------------------------- #
 
@@ -60,13 +64,13 @@ def process_samples(field):
     df_3 = pd.read_csv(PATH+'zcat_'+field+'_v2.0.csv') # need to ask Dale where this data is from !!! # are the zhi/lo accurate tho...
     
     df = df_1.join(df_2).join(df_3)
-    print(df['zbest'], df['zbest2']) # these are differet, though the ID's are correct
+    #print(df['zbest'], df['zbest2']) # these are differet, though the ID's are correct
     
     # check that IDs are consistent then drop IDs
     df = df.drop(['id2'], axis=1)
     
-    # make initial galaxy cuts based on PDF range
-    df = df[ (df['zlo'] <= 3.0) & (df['zhi'] >= 0.5) & (df['class_star'] < 0.9) & (df['photflag'] == 0) ]
+    # make initial galaxy cuts based on PDF range ### ADDED A MASS CUT TO DECREASE THE SAMPLE FOR NOW
+    df = df[ (df['zlo'] <= 3.0) & (df['zhi'] >= 0.5) & (df['class_star'] < 0.9) & (df['photflag'] == 0) & (df['mass'] > 8) ]
     # check for the spec-z exception and count:
     print('number of gals with zspec outside redshift range:', len( df[ ((df['zspec'] > 3)) | ((df['zspec'] < 0.5) & (df['zspec'] > 0)) ]) )
     
@@ -81,9 +85,12 @@ def process_samples(field):
     
     # loop through number of iterations:
     for it in range(0, len(draw_df_z)):
-        
+        print( 'CURRENT ITERATION - '+field, it )
         # calculate separation and delta V ----> might not need LX drop for this step... we'll see
-        results = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'phot-z')
+        results = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'phot-z', field)
+        
+        # recombine fields and save current iteration table
+        # true_pairs.to_csv(PATH+'...... info on z selection (photo/spec) and iteration #)
     
 # -------------------------------------------------------------------------------------------------------------------------- #
 
@@ -121,7 +128,7 @@ def draw_z(df, field): # <20 min for one field
                                                   'Wuyts', 'HB4', 'mFDa4'], delimiter=' ')
 
         # draw the samples
-        n = 5 # number of draws
+        n = 1000 # number of draws
         sum1 = np.sum(pdf1['HB4'])
      
         draw1 = random.choice(pdf1['z'], size=n, p=(pdf1['HB4']/sum1))
@@ -146,14 +153,14 @@ def draw_z(df, field): # <20 min for one field
 # -------------------------------------------------------------------------------------------------------------------------- #
 
 
-def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_df, z_type):
+def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_df, z_type, field):
     if z_type == 'phot-z':
         # if we are choosing just photo-z's, stick with the draws
         # add current z to the all_df dataframe, but first check for consistent lengths:
         z_drawn = current_zdraw_df.to_numpy()
         M_drawn = current_Mdraw_df.to_numpy()
         LX_drawn = current_LXdraw_df.to_numpy()
-        print('checking length of drawn z list')
+        #print('checking length of drawn z list')
         all_df['drawn_z'] = z_drawn
         all_df['drawn_M'] = M_drawn
         all_df['drawn_LX'] = LX_drawn
@@ -197,11 +204,14 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     #R_kpc = cosmo.arcsec_per_kpc_proper(np.array((all_df.iloc[pair_df['prime_index']])['drawn_z'])
     pair_df['kpc_sep'] = (pair_df['arc_sep']) / cosmo.arcsec_per_kpc_proper((all_df.iloc[pair_df['prime_index']])['drawn_z'])
     
-    true_pairs = pair_df[ (pair_df['kpc_sep'] <= 150*u.kpc) & (abs(pair_df['dv']) <= 1000) ]
-    print(true_pairs)
+    #print('before true pairs:', len(pair_df))
+    true_pairs = pair_df[ (pair_df['kpc_sep'] <= 80*u.kpc) & (abs(pair_df['dv']) <= 1000) ]
+    #print('after:', len(true_pairs)) # some kind of mass cut here would be really great...
     
     # add galaxies that aren't pairs into the isolated sample:
-    iso_add = pair_df[ (pair_df['kpc_sep'] > 150*u.kpc) | (abs(pair_df['dv']) > 1000) ]
+    iso_add = (pair_df[ (pair_df['kpc_sep'] > 80*u.kpc) | (abs(pair_df['dv']) > 1000) ])
+    # don't want to get the same ID twice
+    iso_unq = iso_add['prime_index'].unique()
     
     ### perhaps I should just create an array for pair and iso values rather than tracing them back each time?
     
@@ -211,15 +221,124 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     pair_z = np.concatenate( (np.array((all_df.iloc[true_pairs['prime_index']])['drawn_z']), 
                                           np.array((all_df.iloc[true_pairs['partner_index']])['drawn_z'])), axis=0 )
     iso_mass = np.concatenate( (np.array((all_df.iloc[iso_df['prime_index']])['drawn_M']), 
-                                np.array((all_df.iloc[iso_add['prime_index']])['drawn_M'])), axis=0 )
+                                np.array((all_df.iloc[iso_unq])['drawn_M'])), axis=0 )
     iso_z = np.concatenate( (np.array((all_df.iloc[iso_df['prime_index']])['drawn_z']), 
-                             np.array((all_df.iloc[iso_add['prime_index']])['drawn_z'])), axis=0 )
-    
-    print(len(pair_mass), len(iso_mass))
-    
+                             np.array((all_df.iloc[iso_unq])['drawn_z'])), axis=0 )
+        
+    # should return indices of two control galaxies ---- 
+    # OH BUT NEED TO SOMEHOW KEEP THEM WITH PAIR -> split the array directly in half and bring pairs back together
     controls = get_control(iso_mass, iso_z, pair_mass, pair_z)
     
-    print(len(controls), len(pair_mass))
+    middle_idx = len(controls)//2
+    prime_controls = controls[:middle_idx]
+    partner_controls = controls[middle_idx:]
+    
+    # add prime control galaxies to true_pair df ----> reminder these are indices of all_df (CHECK -> pretty sure)
+    true_pairs['prime_control_idx1'] = prime_controls[:,0]
+    true_pairs['prime_control_idx2'] = prime_controls[:,1]
+    true_pairs['partner_control_idx1'] = partner_controls[:,0]
+    true_pairs['partner_control_idx2'] = partner_controls[:,1]
+    
+    # add other important data to the dataframe ====> all the drawn values 
+    # worry about logical position in the df later
+    true_pairs['prime_drawn_z'] = np.array((all_df.iloc[true_pairs['prime_index']])['drawn_z'])
+    true_pairs['prime_drawn_M'] = np.array((all_df.iloc[true_pairs['prime_index']])['drawn_M'])
+    true_pairs['prime_drawn_LX'] = np.array((all_df.iloc[true_pairs['prime_index']])['drawn_LX'])
+    
+    true_pairs['partner_drawn_z'] = np.array((all_df.iloc[true_pairs['partner_index']])['drawn_z'])
+    true_pairs['partner_drawn_M'] = np.array((all_df.iloc[true_pairs['partner_index']])['drawn_M'])
+    true_pairs['partner_drawn_LX'] = np.array((all_df.iloc[true_pairs['partner_index']])['drawn_LX'])
+    
+    # Dealing with missing data (ie 'nan')
+    # must be a better way to do this without a for loop...
+    idx11_z=[]
+    idx11_M=[]
+    idx11_LX=[]
+    idx12_z=[]
+    idx12_M=[]
+    idx12_LX=[]
+    idx21_z=[]
+    idx21_M=[]
+    idx21_LX=[]
+    idx22_z=[]
+    idx22_M=[]
+    idx22_LX=[]
+    
+    for idx11, idx12, idx21, idx22 in zip(true_pairs['prime_control_idx1'], true_pairs['prime_control_idx2'], 
+                                         true_pairs['partner_control_idx1'], true_pairs['partner_control_idx2']):
+        if np.isnan(idx11) == True:
+            idx11_z.append( np.nan )
+            idx11_M.append( np.nan )
+            idx11_LX.append( np.nan )
+        else:
+            idx11_z.append( (all_df.iloc[idx11])['drawn_z'] )
+            idx11_M.append( (all_df.iloc[idx11])['drawn_M'] )
+            idx11_LX.append( (all_df.iloc[idx11])['drawn_LX'] )
+            
+        if np.isnan(idx12) == True:
+            idx12_z.append( np.nan )
+            idx12_M.append( np.nan )
+            idx12_LX.append( np.nan )
+        else:
+            idx12_z.append( (all_df.iloc[idx12])['drawn_z'] )
+            idx12_M.append( (all_df.iloc[idx12])['drawn_M'] )
+            idx12_LX.append( (all_df.iloc[idx12])['drawn_LX'] )
+            
+        if np.isnan(idx21) == True:
+            idx21_z.append( np.nan )
+            idx21_M.append( np.nan )
+            idx21_LX.append( np.nan )
+        else:
+            idx21_z.append( (all_df.iloc[idx21])['drawn_z'] )
+            idx21_M.append( (all_df.iloc[idx21])['drawn_M'] )
+            idx21_LX.append( (all_df.iloc[idx21])['drawn_LX'] )
+            
+        if np.isnan(idx22) == True:
+            idx22_z.append( np.nan )
+            idx22_M.append( np.nan )
+            idx22_LX.append( np.nan )
+        else:
+            idx22_z.append( (all_df.iloc[idx22])['drawn_z'] )
+            idx22_M.append( (all_df.iloc[idx22])['drawn_M'] )
+            idx22_LX.append( (all_df.iloc[idx22])['drawn_LX'] )
+                        
+    true_pairs['prime_control1_drawn_z'] = idx11_z
+    true_pairs['prime_control1_drawn_M'] = idx11_M
+    true_pairs['prime_control1_drawn_LX'] = idx11_LX
+    
+    true_pairs['prime_control2_drawn_z'] = idx12_z
+    true_pairs['prime_control2_drawn_M'] = idx12_M
+    true_pairs['prime_control2_drawn_LX'] = idx12_LX
+    
+    true_pairs['partner_control1_drawn_z'] = idx21_z
+    true_pairs['partner_control1_drawn_M'] = idx21_M
+    true_pairs['partner_control1_drawn_LX'] = idx21_LX
+    
+    true_pairs['partner_control2_drawn_z'] = idx22_z
+    true_pairs['partner_control2_drawn_M'] = idx22_M
+    true_pairs['partner_control2_drawn_LX'] = idx22_LX    
+    
+    # plot histograms to see that distribution of mass and z is the same for pairs and samples:
+    histp_z = np.concatenate( (np.array(true_pairs['prime_drawn_z']), np.array(true_pairs['partner_drawn_z'])), axis=0 )
+    histp_M = np.concatenate( (np.array(true_pairs['prime_drawn_M']), np.array(true_pairs['partner_drawn_M'])), axis=0 )
+    
+    histc_z = np.concatenate( (np.array(idx11_z), np.array(idx12_z), np.array(idx21_z), np.array(idx22_z)), axis=0 )
+    # histc_M = np.concatenate( (np.array(idx11_M), np.array(idx12_M), np.array(idx21_M), np.array(idx22_M)), axis=0 )
+    
+    # histc_z = np.concatenate( (np.array(idx11_z), np.array(idx21_z)), axis=0 )
+    # histc_M = np.concatenate( (np.array(idx11_M), np.array(idx12_M), np.array(idx21_M), np.array(idx22_M)), axis=0 )
+    
+    # # may not be accurate until we have a better mass cut -> better pair to isolated sample
+    # plt.hist(histp_z, bins=50, density=True, histtype='step')
+    # plt.hist(histc_z, bins=50, density=True, histtype='step')
+    # plt.title(field)
+    # # seems that there just aren't as many galaxies to match at high z, so control sample is currently biased towarads low z
+    # # mass seems to be pretty tight tho
+    # # potential solution is to bin then pick controls per bin, to all some duplicates in independent bins
+    # plt.show()
+    
+    true_pairs['field'] = [field]*len(true_pairs)
+    
     
     
 # -------------------------------------------------------------------------------------------------------------------------- #
@@ -242,38 +361,39 @@ def get_control(control_mass, control_z, mass, redshift, N_control=2, zfactor=0.
         zmax = z + dz
         mmin = m-np.log10(mfactor)
         mmax = m+np.log10(mfactor)
-     
-         # create a dataframe for possible matches
+             
+        # create a dataframe for possible matches
         control_match = np.where( (control_z >= zmin) & (control_z <= zmax) & 
                                  (control_mass >= mmin) & (control_mass <= mmax) )
         
         # fix index issue with np.where
         control_match = control_match[0]
-     
+        
+        # immediately get rid of control galaxies that have already been selected
+        control_match = control_match[np.where( np.isin(control_match, control_dup) == False) ]
+             
         # randomize df_iso and move through it until we have desired number of control galaxies
         random.shuffle(control_match)
         mcount = 0
 
         for j in range(0, len(control_match)):
-            #print((control_match[j]))
-            if control_match[j] in np.asarray(control_dup):
-                continue
-            else:
-                control.append(control_match[j])
-                control_dup.append(control_match[j])
-                mcount+=1
+            
+            control.append(control_match[j])
+            control_dup.append(control_match[j])
+            mcount+=1
        
-            # print('Not enough control galaxies for object {}!'.format(i))
             if mcount == N_control: 
                 break
                 
         if mcount < N_control:
             #print('Not enough control galaxies for object {}!'.format(i))
-            control.append(['nan']*(N_control-mcount))
+            while len(control) < N_control:
+                control.append(np.nan)
     
-        control_all.append([control])
+        control_all.append(control)
 
-    return control_all
+    # return as an array
+    return np.asarray(control_all, dtype=object)
 
 
 # -------------------------------------------------------------------------------------------------------------------------- #
