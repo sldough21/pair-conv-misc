@@ -25,6 +25,9 @@ R_kpc = cosmo.arcsec_per_kpc_proper(0.5) # arcsec/kpc at z=0.5
 max_R_kpc = (150*u.kpc * R_kpc) # in arcseconds ### this is the bug right here
 
 
+# -------------------------------------------------------------------------------------------------------------------------- #
+
+
 def main():
     
     print('beginning main()')
@@ -71,7 +74,7 @@ def process_samples(field):
     df = df.reset_index(drop=True)
     
     ##### SMALLER SAMPLE SIZE FOR TEST #####
-    df = df.iloc[0:100]
+    #df = df.iloc[0:100]
     
     # draw 1000 galaxies for each galaxy and calculate Lx(z) and M(z)
     draw_df_z, draw_df_M, draw_df_LX = draw_z(df, field)
@@ -174,7 +177,8 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     match_df = pd.DataFrame(matches)
     pair_df = match_df[ (match_df['arc_sep'] != 0.00) ]
     # get rid of inverse row pairs with mass ratio
-    pair_df['mass_ratio'] = np.array((all_df.iloc[pair_df['prime_index']])['drawn_M']) - np.array((all_df.iloc[pair_df['partner_index']])['drawn_M'])
+    pair_df['mass_ratio'] = (np.array((all_df.iloc[pair_df['prime_index']])['drawn_M']) - 
+                             np.array((all_df.iloc[pair_df['partner_index']])['drawn_M']))
     
     pair_df = pair_df[ (pair_df['mass_ratio'] >= 0) ] # WHY ISN'T IT EXACTLY HALF -> when it's 0 you keep the duplicate...
     
@@ -184,21 +188,38 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     #print(iso_df)
     
     # calculate relative line of sight velocity
-    pair_df['dv'] = ( (((np.array((all_df.iloc[pair_df['prime_index']])['drawn_z'])+1)**2 -1)/((np.array((all_df.iloc[pair_df['prime_index']])['drawn_z'])+1)**2 +1)) - (((np.array((all_df.iloc[pair_df['partner_index']])['drawn_z'])+1)**2 -1)/((np.array((all_df.iloc[pair_df['partner_index']])['drawn_z'])+1)**2 +1)) ) * 2.998e5
+    pair_df['dv'] = ( (((np.array((all_df.iloc[pair_df['prime_index']])['drawn_z'])+1)**2 -1)/ 
+                       ((np.array((all_df.iloc[pair_df['prime_index']])['drawn_z'])+1)**2 +1)) - 
+                     (((np.array((all_df.iloc[pair_df['partner_index']])['drawn_z'])+1)**2 -1)/ 
+                      ((np.array((all_df.iloc[pair_df['partner_index']])['drawn_z'])+1)**2 +1)) ) * 2.998e5
     
     # calculate projected separation at z
     #R_kpc = cosmo.arcsec_per_kpc_proper(np.array((all_df.iloc[pair_df['prime_index']])['drawn_z'])
     pair_df['kpc_sep'] = (pair_df['arc_sep']) / cosmo.arcsec_per_kpc_proper((all_df.iloc[pair_df['prime_index']])['drawn_z'])
     
-    true_pairs = pair_df[ (pair_df['kpc_sep'] <= 80*u.kpc) & (abs(pair_df['dv']) <= 1000) ]
+    true_pairs = pair_df[ (pair_df['kpc_sep'] <= 150*u.kpc) & (abs(pair_df['dv']) <= 1000) ]
     print(true_pairs)
     
+    # add galaxies that aren't pairs into the isolated sample:
+    iso_add = pair_df[ (pair_df['kpc_sep'] > 150*u.kpc) | (abs(pair_df['dv']) > 1000) ]
+    
+    ### perhaps I should just create an array for pair and iso values rather than tracing them back each time?
+    
     # select control galaxies from iso_df ---> needs to be fixed ----> need to make sure indices are right here...
-    pair_mass = np.concatenate( (np.array(), np.array()), axis=0 )
-    pair_z = np.concatenate( (np.array(), np.array()), axis=0 )
-    iso_mass = 
-    iso_z = 
+    pair_mass = np.concatenate( (np.array((all_df.iloc[true_pairs['prime_index']])['drawn_M']), 
+                                          np.array((all_df.iloc[true_pairs['partner_index']])['drawn_M'])), axis=0 )
+    pair_z = np.concatenate( (np.array((all_df.iloc[true_pairs['prime_index']])['drawn_z']), 
+                                          np.array((all_df.iloc[true_pairs['partner_index']])['drawn_z'])), axis=0 )
+    iso_mass = np.concatenate( (np.array((all_df.iloc[iso_df['prime_index']])['drawn_M']), 
+                                np.array((all_df.iloc[iso_add['prime_index']])['drawn_M'])), axis=0 )
+    iso_z = np.concatenate( (np.array((all_df.iloc[iso_df['prime_index']])['drawn_z']), 
+                             np.array((all_df.iloc[iso_add['prime_index']])['drawn_z'])), axis=0 )
+    
+    print(len(pair_mass), len(iso_mass))
+    
     controls = get_control(iso_mass, iso_z, pair_mass, pair_z)
+    
+    print(len(controls), len(pair_mass))
     
     
 # -------------------------------------------------------------------------------------------------------------------------- #
@@ -224,15 +245,18 @@ def get_control(control_mass, control_z, mass, redshift, N_control=2, zfactor=0.
      
          # create a dataframe for possible matches
         control_match = np.where( (control_z >= zmin) & (control_z <= zmax) & 
-                                 (control_m >= mmin) & (control_m <= mmax) )
+                                 (control_mass >= mmin) & (control_mass <= mmax) )
+        
+        # fix index issue with np.where
+        control_match = control_match[0]
      
         # randomize df_iso and move through it until we have desired number of control galaxies
         random.shuffle(control_match)
         mcount = 0
 
         for j in range(0, len(control_match)):
-     
-            if control_match[j] in control_dup:
+            #print((control_match[j]))
+            if control_match[j] in np.asarray(control_dup):
                 continue
             else:
                 control.append(control_match[j])
@@ -244,7 +268,7 @@ def get_control(control_mass, control_z, mass, redshift, N_control=2, zfactor=0.
                 break
                 
         if mcount < N_control:
-            print('Not enough control galaxies for object {}!'.format(i))
+            #print('Not enough control galaxies for object {}!'.format(i))
             control.append(['nan']*(N_control-mcount))
     
         control_all.append([control])
