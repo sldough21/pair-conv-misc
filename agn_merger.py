@@ -48,6 +48,20 @@ def main():
     pool.close()
     pool.join()
     
+    # combine dfs for each iteration and save them as a csv file:
+    # all_data will be 5 dictionaries... test:
+    GDS_dict = all_data[0]
+    EGS_dict = all_data[1]
+    COS_dict = all_data[2]
+    GDN_dict = all_data[3]
+    UDS_dict = all_data[4]
+    for it in GDS_dict:
+        combined_df = pd.concat([GDS_dict[it], EGS_dict[it], COS_dict[it], GDN_dict[it], UDS_dict[it]])
+        combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/zphot_'+str(it))
+    
+    print('files written!')
+          
+    
     # for now, run things without pooling -> easier to read errors
     # process_samples('GDS')
     
@@ -70,7 +84,7 @@ def process_samples(field):
     df = df.drop(['id2'], axis=1)
     
     # make initial galaxy cuts based on PDF range ### ADDED A MASS CUT TO DECREASE THE SAMPLE FOR NOW
-    df = df[ (df['zlo'] <= 3.0) & (df['zhi'] >= 0.5) & (df['class_star'] < 0.9) & (df['photflag'] == 0) & (df['mass'] > 8) ]
+    df = df[ (df['zlo'] <= 3.0) & (df['zhi'] >= 0.5) & (df['class_star'] < 0.9) & (df['photflag'] == 0) & (df['mass'] > 8.5) ]
     # check for the spec-z exception and count:
     print('number of gals with zspec outside redshift range:', len( df[ ((df['zspec'] > 3)) | ((df['zspec'] < 0.5) & (df['zspec'] > 0)) ]) )
     
@@ -78,10 +92,13 @@ def process_samples(field):
     df = df.reset_index(drop=True)
     
     ##### SMALLER SAMPLE SIZE FOR TEST #####
-    #df = df.iloc[0:100]
+    #df = df.iloc[0:200]
     
     # draw 1000 galaxies for each galaxy and calculate Lx(z) and M(z)
     draw_df_z, draw_df_M, draw_df_LX = draw_z(df, field)
+    
+    # create a dictionary to store dfs per each iteration
+    field_dict = {}
     
     # loop through number of iterations:
     for it in range(0, len(draw_df_z)):
@@ -89,8 +106,10 @@ def process_samples(field):
         # calculate separation and delta V ----> might not need LX drop for this step... we'll see
         results = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'phot-z', field)
         
-        # recombine fields and save current iteration table
-        # true_pairs.to_csv(PATH+'...... info on z selection (photo/spec) and iteration #)
+        # add dataframe to the dictionary
+        field_dict[str(it)] = results
+    
+    return field_dict
     
 # -------------------------------------------------------------------------------------------------------------------------- #
 
@@ -103,7 +122,7 @@ def draw_z(df, field): # <20 min for one field
     draw_M = {}
     draw_LX = {}
     
-    for i in tqdm(range(0, len(df['ID']))):
+    for i in range(0, len(df['ID'])):
         # load PDFs based on string ID
         ID_str = df['ID'][i]
         if len(str(ID_str)) == 1: id_string = '0000'+str(ID_str)
@@ -128,7 +147,7 @@ def draw_z(df, field): # <20 min for one field
                                                   'Wuyts', 'HB4', 'mFDa4'], delimiter=' ')
 
         # draw the samples
-        n = 1000 # number of draws
+        n = 50 # number of draws
         sum1 = np.sum(pdf1['HB4'])
      
         draw1 = random.choice(pdf1['z'], size=n, p=(pdf1['HB4']/sum1))
@@ -192,7 +211,8 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     iso_df = match_df[ (match_df['arc_sep'] == 0.00) ]
     # confidently isolated galaxies only match to themselves, so get rid of ID's with other matches
     iso_df = iso_df[ (iso_df['prime_index'].isin(pair_df['prime_index']) == False) ]
-    #print(iso_df)
+    
+    #print(field, 'confident isolated galaxy {}'.format(len(iso_df)))
     
     # calculate relative line of sight velocity
     pair_df['dv'] = ( (((np.array((all_df.iloc[pair_df['prime_index']])['drawn_z'])+1)**2 -1)/ 
@@ -205,11 +225,12 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     pair_df['kpc_sep'] = (pair_df['arc_sep']) / cosmo.arcsec_per_kpc_proper((all_df.iloc[pair_df['prime_index']])['drawn_z'])
     
     #print('before true pairs:', len(pair_df))
-    true_pairs = pair_df[ (pair_df['kpc_sep'] <= 80*u.kpc) & (abs(pair_df['dv']) <= 1000) ]
-    #print('after:', len(true_pairs)) # some kind of mass cut here would be really great...
+    true_pairs = pair_df[ (pair_df['kpc_sep'] <= 100*u.kpc) & (abs(pair_df['dv']) <= 1000) ]
+    #print(field, 'total true pairs {}'.format(len(true_pairs)*2)) # some kind of mass cut here would be really great...
     
     # add galaxies that aren't pairs into the isolated sample:
-    iso_add = (pair_df[ (pair_df['kpc_sep'] > 80*u.kpc) | (abs(pair_df['dv']) > 1000) ])
+    #iso_add = (pair_df[ (pair_df['kpc_sep'] > 100*u.kpc) | (abs(pair_df['dv']) > 10000) ])
+    iso_add = (pair_df[ (abs(pair_df['dv']) > 10000) ])
     # don't want to get the same ID twice
     iso_unq = iso_add['prime_index'].unique()
     
@@ -224,6 +245,10 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
                                 np.array((all_df.iloc[iso_unq])['drawn_M'])), axis=0 )
     iso_z = np.concatenate( (np.array((all_df.iloc[iso_df['prime_index']])['drawn_z']), 
                              np.array((all_df.iloc[iso_unq])['drawn_z'])), axis=0 )
+    
+    #sprint( field, 'number of added isolated galaxies to the sample {}'.format(len(iso_z)) )
+    
+    
         
     # should return indices of two control galaxies ---- 
     # OH BUT NEED TO SOMEHOW KEEP THEM WITH PAIR -> split the array directly in half and bring pairs back together
@@ -338,6 +363,8 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     # plt.show()
     
     true_pairs['field'] = [field]*len(true_pairs)
+    
+    return true_pairs
     
     
     
