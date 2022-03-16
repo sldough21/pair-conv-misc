@@ -4,7 +4,7 @@
 
 # import libraries
 import pandas as pd
-pd.options.mode.chained_assignment = None  # default='warn'
+pd.options.mode.chained_assignment = 'warn'  # default='warn' -> could change to None
 
 import numpy as np
 from time import sleep
@@ -84,8 +84,11 @@ def process_samples(field):
     # check that IDs are consistent then drop IDs
     df = df.drop(['id2'], axis=1)
     
-    # make initial galaxy cuts based on PDF range ### ADDED A MASS CUT TO DECREASE THE SAMPLE FOR NOW
-    df = df[ (df['zlo'] <= 3.0) & (df['zhi'] >= 0.5) & (df['class_star'] < 0.9) & (df['photflag'] == 0) & (df['mass'] > 8.5) ]
+    # throw away galaxies with PDF confidence intervals beyond redshift range
+    df = df.drop(df[ (df['zlo'] > 3.0) | (df['zhi'] < 0.5) ].index)
+    # make additional quality cuts
+    df = df[ (df['class_star'] < 0.9) & (df['photflag'] == 0) & (df['mass'] > 8.5) ]
+    
     # check for the spec-z exception and count:
     print('number of gals with zspec outside redshift range:', len( df[ ((df['zspec'] > 3)) | ((df['zspec'] < 0.5) & (df['zspec'] > 0)) ]) )
     
@@ -226,9 +229,9 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     matches = {'prime_index':idxc, 'partner_index':idxcatalog, 'arc_sep': d2d.arcsecond}
     match_df = pd.DataFrame(matches)
     pair_df = match_df[ (match_df['arc_sep'] != 0.00) ]
-    # get rid of inverse row pairs with mass ratio
-    pair_df['mass_ratio'] = (np.array((all_df.iloc[pair_df['prime_index']])['drawn_M']) - 
-                             np.array((all_df.iloc[pair_df['partner_index']])['drawn_M']))
+    # get rid of inverse row pairs with mass ratio -------------------------------------> CHANGED THIS, CHECK THAT OK
+    pair_df['mass_ratio'] = (np.array(all_df.loc[pair_df['prime_index'], 'drawn_M']) - 
+                             np.array(all_df.loc[pair_df['partner_index'],'drawn_M']) )
     
     pair_df = pair_df[ (pair_df['mass_ratio'] >= 0) ] # WHY ISN'T IT EXACTLY HALF -> when it's 0 you keep the duplicate...
     
@@ -239,14 +242,14 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     #print(field, 'confident isolated galaxy {}'.format(len(iso_df)))
     
     # calculate relative line of sight velocity
-    pair_df['dv'] = ( (((np.array((all_df.iloc[pair_df['prime_index']])['drawn_z'])+1)**2 -1)/ 
-                       ((np.array((all_df.iloc[pair_df['prime_index']])['drawn_z'])+1)**2 +1)) - 
-                     (((np.array((all_df.iloc[pair_df['partner_index']])['drawn_z'])+1)**2 -1)/ 
-                      ((np.array((all_df.iloc[pair_df['partner_index']])['drawn_z'])+1)**2 +1)) ) * 2.998e5
+    pair_df['dv'] = ( (((np.array(all_df.loc[pair_df['prime_index'], 'drawn_z'])+1)**2 -1)/ 
+                       ((np.array(all_df.loc[pair_df['prime_index'], 'drawn_z'])+1)**2 +1)) - 
+                     (((np.array(all_df.loc[pair_df['partner_index'], 'drawn_z'])+1)**2 -1)/ 
+                      ((np.array(all_df.loc[pair_df['partner_index'], 'drawn_z'])+1)**2 +1)) ) * 2.998e5
     
     # calculate projected separation at z
     #R_kpc = cosmo.arcsec_per_kpc_proper(np.array((all_df.iloc[pair_df['prime_index']])['drawn_z'])
-    pair_df['kpc_sep'] = (pair_df['arc_sep']) / cosmo.arcsec_per_kpc_proper((all_df.iloc[pair_df['prime_index']])['drawn_z'])
+    pair_df['kpc_sep'] = (pair_df['arc_sep']) / cosmo.arcsec_per_kpc_proper(all_df.loc[pair_df['prime_index'], 'drawn_z'])
     
     #print('before true pairs:', len(pair_df))
     true_pairs = pair_df[ (pair_df['kpc_sep'] <= 100*u.kpc) & (abs(pair_df['dv']) <= 1000) ]
@@ -261,14 +264,14 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     ### perhaps I should just create an array for pair and iso values rather than tracing them back each time?
     
     # select control galaxies from iso_df ---> needs to be fixed ----> need to make sure indices are right here...
-    pair_mass = np.concatenate( (np.array((all_df.iloc[true_pairs['prime_index']])['drawn_M']), 
-                                          np.array((all_df.iloc[true_pairs['partner_index']])['drawn_M'])), axis=0 )
-    pair_z = np.concatenate( (np.array((all_df.iloc[true_pairs['prime_index']])['drawn_z']), 
-                                          np.array((all_df.iloc[true_pairs['partner_index']])['drawn_z'])), axis=0 )
-    iso_mass = np.concatenate( (np.array((all_df.iloc[iso_df['prime_index']])['drawn_M']), 
-                                np.array((all_df.iloc[iso_unq])['drawn_M'])), axis=0 )
-    iso_z = np.concatenate( (np.array((all_df.iloc[iso_df['prime_index']])['drawn_z']), 
-                             np.array((all_df.iloc[iso_unq])['drawn_z'])), axis=0 )
+    pair_mass = np.concatenate( (np.array(all_df.loc[true_pairs['prime_index'], 'drawn_M']), 
+                                          np.array(all_df.loc[true_pairs['partner_index'], 'drawn_M'])), axis=0 )
+    pair_z = np.concatenate( (np.array(all_df.loc[true_pairs['prime_index'], 'drawn_z']), 
+                                          np.array(all_df.loc[true_pairs['partner_index'], 'drawn_z'])), axis=0 )
+    iso_mass = np.concatenate( (np.array(all_df.loc[iso_df['prime_index'], 'drawn_M']), 
+                                np.array(all_df.loc[iso_unq, 'drawn_M'])), axis=0 )
+    iso_z = np.concatenate( (np.array(all_df.loc[iso_df['prime_index'], 'drawn_z']), 
+                             np.array(all_df.loc[iso_unq, 'drawn_z'])), axis=0 )
     
     #sprint( field, 'number of added isolated galaxies to the sample {}'.format(len(iso_z)) )
     
@@ -290,13 +293,13 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     
     # add other important data to the dataframe ====> all the drawn values 
     # worry about logical position in the df later
-    true_pairs['prime_drawn_z'] = np.array((all_df.iloc[true_pairs['prime_index']])['drawn_z'])
-    true_pairs['prime_drawn_M'] = np.array((all_df.iloc[true_pairs['prime_index']])['drawn_M'])
-    true_pairs['prime_drawn_LX'] = np.array((all_df.iloc[true_pairs['prime_index']])['drawn_LX'])
+    true_pairs['prime_drawn_z'] = np.array(all_df.loc[true_pairs['prime_index'], 'drawn_z'])
+    true_pairs['prime_drawn_M'] = np.array(all_df.loc[true_pairs['prime_index'], 'drawn_M'])
+    true_pairs['prime_drawn_LX'] = np.array(all_df.loc[true_pairs['prime_index'], 'drawn_LX'])
     
-    true_pairs['partner_drawn_z'] = np.array((all_df.iloc[true_pairs['partner_index']])['drawn_z'])
-    true_pairs['partner_drawn_M'] = np.array((all_df.iloc[true_pairs['partner_index']])['drawn_M'])
-    true_pairs['partner_drawn_LX'] = np.array((all_df.iloc[true_pairs['partner_index']])['drawn_LX'])
+    true_pairs['partner_drawn_z'] = np.array(all_df.loc[true_pairs['partner_index'], 'drawn_z'])
+    true_pairs['partner_drawn_M'] = np.array(all_df.loc[true_pairs['partner_index'], 'drawn_M'])
+    true_pairs['partner_drawn_LX'] = np.array(all_df.loc[true_pairs['partner_index'], 'drawn_LX'])
     
     # Dealing with missing data (ie 'nan')
     # must be a better way to do this without a for loop...
@@ -320,36 +323,36 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
             idx11_M.append( np.nan )
             idx11_LX.append( np.nan )
         else:
-            idx11_z.append( (all_df.iloc[idx11])['drawn_z'] )
-            idx11_M.append( (all_df.iloc[idx11])['drawn_M'] )
-            idx11_LX.append( (all_df.iloc[idx11])['drawn_LX'] )
+            idx11_z.append( all_df.loc[idx11, 'drawn_z'] )
+            idx11_M.append( all_df.loc[idx11, 'drawn_M'] )
+            idx11_LX.append( all_df.loc[idx11, 'drawn_LX'] )
             
         if np.isnan(idx12) == True:
             idx12_z.append( np.nan )
             idx12_M.append( np.nan )
             idx12_LX.append( np.nan )
         else:
-            idx12_z.append( (all_df.iloc[idx12])['drawn_z'] )
-            idx12_M.append( (all_df.iloc[idx12])['drawn_M'] )
-            idx12_LX.append( (all_df.iloc[idx12])['drawn_LX'] )
+            idx12_z.append( all_df.loc[idx12, 'drawn_z'] )
+            idx12_M.append( all_df.loc[idx12, 'drawn_M'] )
+            idx12_LX.append( all_df.loc[idx12, 'drawn_LX'] )
             
         if np.isnan(idx21) == True:
             idx21_z.append( np.nan )
             idx21_M.append( np.nan )
             idx21_LX.append( np.nan )
         else:
-            idx21_z.append( (all_df.iloc[idx21])['drawn_z'] )
-            idx21_M.append( (all_df.iloc[idx21])['drawn_M'] )
-            idx21_LX.append( (all_df.iloc[idx21])['drawn_LX'] )
+            idx21_z.append( all_df.loc[idx21, 'drawn_z'] )
+            idx21_M.append( all_df.loc[idx21, 'drawn_M'] )
+            idx21_LX.append( all_df.loc[idx21, 'drawn_LX'] )
             
         if np.isnan(idx22) == True:
             idx22_z.append( np.nan )
             idx22_M.append( np.nan )
             idx22_LX.append( np.nan )
         else:
-            idx22_z.append( (all_df.iloc[idx22])['drawn_z'] )
-            idx22_M.append( (all_df.iloc[idx22])['drawn_M'] )
-            idx22_LX.append( (all_df.iloc[idx22])['drawn_LX'] )
+            idx22_z.append( all_df.loc[idx22, 'drawn_z'] )
+            idx22_M.append( all_df.loc[idx22, 'drawn_M'] )
+            idx22_LX.append( all_df.loc[idx22, 'drawn_LX'] )
                         
     true_pairs['prime_control1_drawn_z'] = idx11_z
     true_pairs['prime_control1_drawn_M'] = idx11_M
@@ -368,10 +371,10 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     true_pairs['partner_control2_drawn_LX'] = idx22_LX    
     
     # plot histograms to see that distribution of mass and z is the same for pairs and samples:
-    histp_z = np.concatenate( (np.array(true_pairs['prime_drawn_z']), np.array(true_pairs['partner_drawn_z'])), axis=0 )
-    histp_M = np.concatenate( (np.array(true_pairs['prime_drawn_M']), np.array(true_pairs['partner_drawn_M'])), axis=0 )
+#     histp_z = np.concatenate( (np.array(true_pairs['prime_drawn_z']), np.array(true_pairs['partner_drawn_z'])), axis=0 )
+#     histp_M = np.concatenate( (np.array(true_pairs['prime_drawn_M']), np.array(true_pairs['partner_drawn_M'])), axis=0 )
     
-    histc_z = np.concatenate( (np.array(idx11_z), np.array(idx12_z), np.array(idx21_z), np.array(idx22_z)), axis=0 )
+#     histc_z = np.concatenate( (np.array(idx11_z), np.array(idx12_z), np.array(idx21_z), np.array(idx22_z)), axis=0 )
     # histc_M = np.concatenate( (np.array(idx11_M), np.array(idx12_M), np.array(idx21_M), np.array(idx22_M)), axis=0 )
     
     # histc_z = np.concatenate( (np.array(idx11_z), np.array(idx21_z)), axis=0 )
