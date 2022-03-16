@@ -57,7 +57,8 @@ def main():
     UDS_dict = all_data[4]
     for it in GDS_dict:
         combined_df = pd.concat([GDS_dict[it], EGS_dict[it], COS_dict[it], GDN_dict[it], UDS_dict[it]])
-        combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/zphot_'+str(it))
+        #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photoz_results/photoz_'+str(it)+'.csv')
+        combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/photo-specz_'+str(it)+'.csv')
     
     print('files written!')
           
@@ -92,7 +93,7 @@ def process_samples(field):
     df = df.reset_index(drop=True)
     
     ##### SMALLER SAMPLE SIZE FOR TEST #####
-    #df = df.iloc[0:200]
+    # df = df.iloc[0:200]
     
     # draw 1000 galaxies for each galaxy and calculate Lx(z) and M(z)
     draw_df_z, draw_df_M, draw_df_LX = draw_z(df, field)
@@ -104,7 +105,9 @@ def process_samples(field):
     for it in range(0, len(draw_df_z)):
         print( 'CURRENT ITERATION - '+field, it )
         # calculate separation and delta V ----> might not need LX drop for this step... we'll see
-        results = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'phot-z', field)
+        #results = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'phot-z', field)
+        results = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'phot+spec_z', field)
+
         
         # add dataframe to the dictionary
         field_dict[str(it)] = results
@@ -147,7 +150,7 @@ def draw_z(df, field): # <20 min for one field
                                                   'Wuyts', 'HB4', 'mFDa4'], delimiter=' ')
 
         # draw the samples
-        n = 50 # number of draws
+        n = 1000 # number of draws
         sum1 = np.sum(pdf1['HB4'])
      
         draw1 = random.choice(pdf1['z'], size=n, p=(pdf1['HB4']/sum1))
@@ -183,6 +186,27 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
         all_df['drawn_z'] = z_drawn
         all_df['drawn_M'] = M_drawn
         all_df['drawn_LX'] = LX_drawn
+        
+    ### BUILD STRUCTURE FOR z_type = 'phot+spec_z' ###
+    if z_type == 'phot+spec_z':
+        # if we are choosing just photo-z's, stick with the draws
+        # add current z to the all_df dataframe
+        z_drawn = current_zdraw_df.to_numpy()
+        M_drawn = current_Mdraw_df.to_numpy()
+        LX_drawn = current_LXdraw_df.to_numpy()
+        #print('checking length of drawn z list')
+        all_df['drawn_z'] = z_drawn
+        all_df['drawn_M'] = M_drawn
+        all_df['drawn_LX'] = LX_drawn
+        # if there is a spec q on quality > 1, change drawn_z to spec_z
+        ### WILL NEED TO THINK CAREFULLY ON HOW THIS EFFECTS DRAWN M AND LX ###
+        all_df.loc[ (all_df['zspec'] > 0.5) & (all_df['q_zspec'] > 1) , 'drawn_z'] = all_df['zspec']
+        
+    ### CHECK THAT THE SPEC Z CUT WORKED ###
+    # print(all_df['zspec'], all_df['q_zspec'], all_df['drawn_z'])
+    
+    # find out how many zspecs we actually end up using
+    # print('number of spec z: ', all_df.loc[ (all_df['zspec'] > 0.5) & (all_df['q_zspec'] > 1) , 'drawn_z'].count())
         
     #elif z_type == 'spec-z':
         
