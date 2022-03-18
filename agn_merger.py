@@ -62,8 +62,8 @@ def main():
     UDS_dict = all_data[4]
     for it in GDS_dict:
         combined_df = pd.concat([GDS_dict[it], EGS_dict[it], COS_dict[it], GDN_dict[it], UDS_dict[it]])
-        combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photoz_results/photoz_'+str(it)+'.csv')
-        #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/photo-specz_'+str(it)+'.csv')
+        #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photoz_results/photoz_'+str(it)+'.csv')
+        combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/photo-specz_'+str(it)+'.csv')
     
     print('files written!')
         
@@ -101,7 +101,7 @@ def process_samples(field):
     df = df.reset_index(drop=True)
     
     ##### SMALLER SAMPLE SIZE FOR TEST #####
-    #df = df.iloc[0:1000]
+    #df = df.iloc[0:100]
     
     # draw 1000 galaxies for each galaxy and calculate Lx(z) and M(z)
     draw_df_z, draw_df_M, draw_df_LX = draw_z(df, field)
@@ -113,8 +113,8 @@ def process_samples(field):
     for it in range(0, len(draw_df_z)):
         print( 'CURRENT ITERATION - '+field, it )
         # calculate separation and delta V ----> might not need LX drop for this step... we'll see
-        results = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'phot-z', field)
-        #results = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'phot+spec_z', field)
+        #results = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'phot-z', field)
+        results = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'phot+spec_z', field)
 
         
         # add dataframe to the dictionary
@@ -135,7 +135,7 @@ def draw_z(df, field): # <20 min for one field
     
     for i in range(0, len(df['ID'])):
         # load PDFs based on string ID
-        ID_str = df['ID'][i]
+        ID_str = df.loc[i,'ID']
         if len(str(ID_str)) == 1: id_string = '0000'+str(ID_str)
         if len(str(ID_str)) == 2: id_string = '000'+str(ID_str)
         if len(str(ID_str)) == 3: id_string = '00'+str(ID_str)
@@ -158,14 +158,14 @@ def draw_z(df, field): # <20 min for one field
                                                   'Wuyts', 'HB4', 'mFDa4'], delimiter=' ')
 
         # draw the samples
-        n = 100 # number of draws
+        n = 500 # number of draws
         sum1 = np.sum(pdf1['HB4'])
      
         draw1 = random.choice(pdf1['z'], size=n, p=(pdf1['HB4']/sum1))
         
         # this is also where you could calculate Lx(z) and M(z)...
-        Mz = [df['mass'][i]] * n
-        LXz = [df['LX'][i]] * n
+        Mz = [df.loc[i, 'mass']] * n
+        LXz = [df.loc[i, 'LX']] * n
         
         # add entry into dictionary
         draw_z['gal_'+str(ID_str)+'_z'] = draw1
@@ -209,7 +209,6 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
         # if there is a spec q on quality > 1, change drawn_z to spec_z
         ### WILL NEED TO THINK CAREFULLY ON HOW THIS EFFECTS DRAWN M AND LX ###
         all_df.loc[ (all_df['zspec'] > 0.5) & (all_df['q_zspec'] > 1) , 'drawn_z'] = all_df['zspec']
-        print('yeh boi i ran')
         
     ### CHECK THAT THE SPEC Z CUT WORKED ###
     # print(all_df['zspec'], all_df['q_zspec'], all_df['drawn_z'])
@@ -254,7 +253,6 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     
     # Do the second bit of mass_ratio cut after iso gal selection so isolated sample doesn't include high mass ratio pairs
     pair_df = pair_df[ (pair_df['mass_ratio'] <= 1) ] ### BE CAREFUL WITH ISO SELECTION
-
     
     #print(field, 'confident isolated galaxy {}'.format(len(iso_df)))
     
@@ -267,10 +265,10 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     # calculate projected separation at z
     #R_kpc = cosmo.arcsec_per_kpc_proper(np.array((all_df.iloc[pair_df['prime_index']])['drawn_z'])
     pair_df['kpc_sep'] = (pair_df['arc_sep']) / cosmo.arcsec_per_kpc_proper(all_df.loc[pair_df['prime_index'], 'drawn_z'])
-    
+        
     #print('before true pairs:', len(pair_df))
     true_pairs = pair_df[ (pair_df['kpc_sep'] <= 100*u.kpc) & (abs(pair_df['dv']) <= 1000) ]
-    #print(field, 'total true pairs {}'.format(len(true_pairs)*2))
+    #print(true_pairs)
     
     ### ADD MASS LIMIT CUT NOW TO TRUE PAIRS, BC WE WILL NEED TO MATCH THE SMALLER GALS IN OUR ISO GROUP
     # n, bins, patches = plt.hist(all_df.loc[ true_pairs['prime_index'], 'drawn_M' ], bins=50, histtype='step')
@@ -281,12 +279,24 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     # plt.show()
     # histograms confirm the mass cut on prime galaxies was successful
     ### -----> revisit this syntax later...
-    
+        
     # add galaxies that aren't pairs into the isolated sample:
+    ############################################################################################################
     #iso_add = (pair_df[ (pair_df['kpc_sep'] > 100*u.kpc) | (abs(pair_df['dv']) > 10000) ])
     iso_add = (pair_df[ (abs(pair_df['dv']) > 10000) ])
-    # don't want to get the same ID twice
-    iso_unq = iso_add['prime_index'].unique()
+
+    # just stack prime and partner indices into massive array:
+    iso_add_idx = np.concatenate( (np.array(iso_add['prime_index']), np.array(iso_add['partner_index'])), axis=0)
+    # return unique indices
+    iso_add_uniq = np.unique(iso_add_idx)
+    # get rid of cases where those indices appear elsewhere, so create array for true pair indices
+    true_pair_idx = np.concatenate( (np.array(true_pairs['prime_index']), np.array(true_pairs['partner_index'])), axis=0)
+    # only keep the elements that aren't in true pair:
+    mask = np.isin(iso_add_uniq, true_pair_idx, invert=True)
+    iso_unq = iso_add_uniq[mask]
+    
+    ######################### based on the extremely low AGN fractions, I'd bet it's an issue before ###########
+    ############################################################################################################
     
     ### perhaps I should just create an array for pair and iso values rather than tracing them back each time?
     
@@ -337,15 +347,19 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     
     # Dealing with missing data (ie 'nan')
     # must be a better way to do this without a for loop...
+    idx11_id=[]
     idx11_z=[]
     idx11_M=[]
     idx11_LX=[]
+    idx12_id=[]
     idx12_z=[]
     idx12_M=[]
     idx12_LX=[]
+    idx21_id=[]
     idx21_z=[]
     idx21_M=[]
     idx21_LX=[]
+    idx22_id=[]
     idx22_z=[]
     idx22_M=[]
     idx22_LX=[]
@@ -353,53 +367,65 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     for idx11, idx12, idx21, idx22 in zip((prime_controls[:,0]), (prime_controls[:,1]), 
                                          (partner_controls[:,0]), (partner_controls[:,1])):
         if np.isnan(idx11) == True:
+            idx11_id.append( np.nan )
             idx11_z.append( np.nan )
             idx11_M.append( np.nan )
             idx11_LX.append( np.nan )
         else:
+            idx11_id.append( iso_idx[idx11] )
             idx11_z.append( all_df.loc[iso_idx[idx11], 'drawn_z'] )
             idx11_M.append( all_df.loc[iso_idx[idx11], 'drawn_M'] )
             idx11_LX.append( all_df.loc[iso_idx[idx11], 'drawn_LX'] )
             
         if np.isnan(idx12) == True:
+            idx12_id.append( np.nan )
             idx12_z.append( np.nan )
             idx12_M.append( np.nan )
             idx12_LX.append( np.nan )
         else:
+            idx12_id.append( iso_idx[idx12] )
             idx12_z.append( all_df.loc[iso_idx[idx12], 'drawn_z'] )
             idx12_M.append( all_df.loc[iso_idx[idx12], 'drawn_M'] )
             idx12_LX.append( all_df.loc[iso_idx[idx12], 'drawn_LX'] )
             
         if np.isnan(idx21) == True:
+            idx21_id.append( np.nan )
             idx21_z.append( np.nan )
             idx21_M.append( np.nan )
             idx21_LX.append( np.nan )
         else:
+            idx21_id.append( iso_idx[idx21] )
             idx21_z.append( all_df.loc[iso_idx[idx21], 'drawn_z'] )
             idx21_M.append( all_df.loc[iso_idx[idx21], 'drawn_M'] )
             idx21_LX.append( all_df.loc[iso_idx[idx21], 'drawn_LX'] )
             
         if np.isnan(idx22) == True:
+            idx22_id.append( np.nan )
             idx22_z.append( np.nan )
             idx22_M.append( np.nan )
             idx22_LX.append( np.nan )
         else:
+            idx22_id.append( iso_idx[idx22] )
             idx22_z.append( all_df.loc[iso_idx[idx22], 'drawn_z'] )
             idx22_M.append( all_df.loc[iso_idx[idx22], 'drawn_M'] )
             idx22_LX.append( all_df.loc[iso_idx[idx22], 'drawn_LX'] )
                         
+    true_pairs['prime_control1_ID'] = idx11_id           
     true_pairs['prime_control1_drawn_z'] = idx11_z
     true_pairs['prime_control1_drawn_M'] = idx11_M
     true_pairs['prime_control1_drawn_LX'] = idx11_LX
     
+    true_pairs['prime_control2_ID'] = idx12_id 
     true_pairs['prime_control2_drawn_z'] = idx12_z
     true_pairs['prime_control2_drawn_M'] = idx12_M
     true_pairs['prime_control2_drawn_LX'] = idx12_LX
     
+    true_pairs['partner_control1_ID'] = idx21_id 
     true_pairs['partner_control1_drawn_z'] = idx21_z
     true_pairs['partner_control1_drawn_M'] = idx21_M
     true_pairs['partner_control1_drawn_LX'] = idx21_LX
     
+    true_pairs['partner_control2_ID'] = idx22_id 
     true_pairs['partner_control2_drawn_z'] = idx22_z
     true_pairs['partner_control2_drawn_M'] = idx22_M
     true_pairs['partner_control2_drawn_LX'] = idx22_LX    
