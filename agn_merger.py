@@ -62,9 +62,10 @@ def main():
     UDS_dict = all_data[4]
     for it in GDS_dict:
         combined_df = pd.concat([GDS_dict[it], EGS_dict[it], COS_dict[it], GDN_dict[it], UDS_dict[it]])
-        combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photoz_results/photoz_'+str(it)+'.csv')
-        #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/photo-specz_'+str(it)+'.csv')
+        #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photoz_results/photoz_'+str(it)+'.csv')
+        combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/photo-specz_'+str(it)+'.csv')
         #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/SUP_TEST.csv')
+        #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/specz_results/specz_'+str(it)+'.csv')
     
     print('files written!')
         
@@ -96,13 +97,14 @@ def process_samples(field):
     df = df[ (df['class_star'] < 0.9) & (df['photflag'] == 0) & (df['mass'] > (mass_lo-1)) ]
     
     # check for the spec-z exception and count:
-    print('number of gals with zspec outside redshift range:', len( df[ ((df['zspec'] > 3)) | ((df['zspec'] < 0.5) & (df['zspec'] > 0)) ]) )
+    print('number of gals with zspec outside redshift range:', len( df[ ((df['zspec'] > 3)) |
+                                                                       ((df['zspec'] < 0.5) & (df['zspec'] > 0)) ]) )
     
     # reset index
     df = df.reset_index(drop=True)
     
     ##### SMALLER SAMPLE SIZE FOR TEST #####
-    #df = df.iloc[0:500]
+    # df = df.iloc[0:500]
     
     # draw 1000 galaxies for each galaxy and calculate Lx(z) and M(z)
     draw_df_z, draw_df_M, draw_df_LX = draw_z(df, field)
@@ -114,9 +116,9 @@ def process_samples(field):
     for it in range(0, len(draw_df_z)):
         print( 'CURRENT ITERATION - '+field, it )
         # calculate separation and delta V ----> might not need LX drop for this step... we'll see
-        results = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'phot-z', field)
-        #results = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'phot+spec_z', field)
-
+        #results = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'p', field)
+        results = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'ps', field)
+        #results = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 's', field)
         
         # add dataframe to the dictionary
         field_dict[str(it)] = results
@@ -159,7 +161,7 @@ def draw_z(df, field): # <20 min for one field
                                                   'Wuyts', 'HB4', 'mFDa4'], delimiter=' ')
 
         # draw the samples
-        n = 200 # number of draws
+        n = 500 # number of draws
         sum1 = np.sum(pdf1['HB4'])
      
         draw1 = random.choice(pdf1['z'], size=n, p=(pdf1['HB4']/sum1))
@@ -200,7 +202,7 @@ def draw_z(df, field): # <20 min for one field
 
 def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_df, z_type, field):
     ### 1 #######################################################################################################
-    if z_type == 'phot-z':
+    if z_type == 'p':
         # if we are choosing just photo-z's, stick with the draws
         # add current z to the all_df dataframe, but first check for consistent lengths:
         z_drawn = current_zdraw_df.to_numpy()
@@ -212,7 +214,7 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
         all_df['drawn_LX'] = LX_drawn
         
     ### BUILD STRUCTURE FOR z_type = 'phot+spec_z' ###
-    elif z_type == 'phot+spec_z':
+    elif z_type == 'ps':
         # if we are choosing just photo-z's, stick with the draws
         # add current z to the all_df dataframe
         z_drawn = current_zdraw_df.to_numpy()
@@ -224,7 +226,21 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
         all_df['drawn_LX'] = LX_drawn
         # if there is a spec q on quality > 1, change drawn_z to spec_z
         ### WILL NEED TO THINK CAREFULLY ON HOW THIS EFFECTS DRAWN M AND LX ###
-        all_df.loc[ (all_df['zspec'] > 0.5) & (all_df['q_zspec'] > 1) , 'drawn_z'] = all_df['zspec']
+        all_df.loc[ (all_df['q_zspec'] > 1) , 'drawn_z'] = all_df['zspec']
+        
+    elif z_type == 's':
+        # if we are choosing just photo-z's, stick with the draws
+        # add current z to the all_df dataframe
+        z_drawn = current_zdraw_df.to_numpy()
+        M_drawn = current_Mdraw_df.to_numpy()
+        LX_drawn = current_LXdraw_df.to_numpy()
+        #print('checking length of drawn z list')
+        all_df['drawn_z'] = z_drawn
+        all_df['drawn_M'] = M_drawn
+        all_df['drawn_LX'] = LX_drawn
+        # make drawn_z the spec z and throw out the rest
+        all_df.loc[ (all_df['q_zspec'] > 1) , 'drawn_z'] = all_df['zspec']
+        all_df = all_df[ (all_df['q_zspec'] > 1) ]
         
     ### CHECK THAT THE SPEC Z CUT WORKED ###
     # print(all_df['zspec'], all_df['q_zspec'], all_df['drawn_z'])
@@ -236,7 +252,7 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     all_df = all_df[ (all_df['drawn_z'] >= 0.5) & (all_df['drawn_z'] <= 3.0) ]
     # reset this index:
     all_df = all_df.reset_index(drop=True) # this probably means that previous results are hooplaa
-    
+        
     # match catalogs:
     df_pos = SkyCoord(all_df['RAdeg'],all_df['DEdeg'],unit='deg')
     idxc, idxcatalog, d2d, d3d = df_pos.search_around_sky(df_pos, max_R_kpc)
@@ -280,6 +296,9 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     # Do the second bit of mass_ratio cut after iso gal selection so isolated sample doesn't include high mass ratio pairs
     pair_df = pair_df[ (pair_df['mass_ratio'] <= 1) ] ### BE CAREFUL WITH ISO SELECTION
     
+    if len(pair_df) == 0:
+        print(field)
+        return
     
     # calculate relative line of sight velocity
     pair_df['dv'] = ( (((np.array(all_df.loc[pair_df['prime_index'], 'drawn_z'])+1)**2 -1)/ 
