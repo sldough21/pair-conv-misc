@@ -548,7 +548,8 @@ def get_control(control_mass, control_z, mass, redshift, N_control=2, zfactor=0.
 
     dz = zfactor
     
-    ### TRY SHUFFLING PAIR ARRAYS ###
+    ### TRY SHUFFLING PAIR ARRAYS ### ADD DISTANCE METRIC ###
+    # added combinatory distance metric, will need to play around with whether I want hard z and mass control limits...
 
     # create list to store lists of control indices per prime galaxy
     control_all = []
@@ -576,11 +577,10 @@ def get_control(control_mass, control_z, mass, redshift, N_control=2, zfactor=0.
                                (all_iso_df['mass'] <= mmax) ]
         
         # create columns for difference between z/mass control and pair z/m
-        cmatch_df['zdif'] = np.abs(cmatch_df['z'] - z)
-        cmatch_df['massdif'] = np.abs(cmatch_df['mass'] - m)
+        cmatch_df['dif'] = (cmatch_df['z'] - z)**2 + (cmatch_df['mass'] - m) **2
                 
         # need to sort dataframe based on two columns THEN continue
-        cmatch_df.sort_values(by=['zdif','massdif'], inplace=True, ascending = [True, True])
+        cmatch_df.sort_values(by=['dif'], inplace=True, ascending = True)
 
         # immediately get rid of control galaxies that have already been selected
         cmatch_df = cmatch_df[ ((cmatch_df.index).isin(control_dup) == False) ]
