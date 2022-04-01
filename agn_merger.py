@@ -16,12 +16,13 @@ from multiprocessing import Pool, freeze_support, RLock
 from astropy.cosmology import FlatLambdaCDM
 from astropy import units as u
 from astropy.coordinates import SkyCoord
+from astropy.io import fits
 
 from numpy import random
 
 import matplotlib.pyplot as plt
 
-PATH = '/nobackup/c1029594/CANDELS_AGN_merger_data/Data_CSV/'
+PATH = '/nobackup/c1029594/CANDELS_AGN_merger_data/Pair Project - Updated Data/'
 
 cosmo = FlatLambdaCDM(H0=70 * u.km / u.s / u.Mpc, Tcmb0=2.725 * u.K, Om0=0.3) # 0.7 for omega
 # determine conservative ang separation correspondong to 150 kpc at z = 0.5
@@ -80,25 +81,33 @@ def process_samples(field):
     # this is essentially the main function but for each field, to be combined and saved as csv's upon completion
     print('beginning process_samples() for {}'.format(field))
 
-    # load data 
-    df_1 = pd.read_csv(PATH+'CANDELS_'+field+'_1018_LX.csv')
-    df_2 = pd.read_csv(PATH+'CANDELS_'+field+'_1018_LX_z.csv')
-    df_3 = pd.read_csv(PATH+'zcat_'+field+'_v2.0.csv') # need to ask Dale where this data is from !!! # are the zhi/lo accurate tho...
+#     # load data 
+#     df_1 = pd.read_csv(PATH+'CANDELS_'+field+'_1018_LX.csv')
+#     df_2 = pd.read_csv(PATH+'CANDELS_'+field+'_1018_LX_z.csv')
+#     df_3 = pd.read_csv(PATH+'zcat_'+field+'_v2.0.csv') # need to ask Dale where this data is from !!! # are the zhi/lo accurate tho...
     
-    df = df_1.join(df_2).join(df_3)
-    #print(df['zbest'], df['zbest2']) # these are differet, though the ID's are correct
+#     df = df_1.join(df_2).join(df_3)
+#     #print(df['zbest'], df['zbest2']) # these are differet, though the ID's are correct
     
-    # check that IDs are consistent then drop IDs
-    df = df.drop(['id2'], axis=1)
+#     # check that IDs are consistent then drop IDs
+#     df = df.drop(['id2'], axis=1)
     
+    # load in new catalogs
+    with fits.open(PATH+'CANDELS_Catalogs/CANDELS.'+field+'.1018.Lx_best.wFx.fits') as data:
+        df_data = np.array(data[1].data)
+    # to fix endian error reading fits file
+    df_fix = df_data.byteswap().newbyteorder()
+    df = pd.DataFrame(df_fix)
+
+
     # throw away galaxies with PDF confidence intervals beyond redshift range
     #df = df.drop(df[ (df['zlo'] > 3.5) | (df['zhi'] < 0.25) ].index)
     # make additional quality cuts -> make cut on mass log(M) = 1 below limit to get pairs below mass limit
-    df = df[ (df['class_star'] < 0.9) & (df['photflag'] == 0) & (df['mass'] > (mass_lo-1)) ]
+    df = df[ (df['CLASS_STAR'] < 0.9) & (df['PHOTFLAG'] == 0) & (df['MASS'] > (mass_lo-1)) ]
     
     # check for the spec-z exception and count:
-    print('number of gals with zspec outside redshift range:', len( df[ ((df['zspec'] > 3)) |
-                                                                       ((df['zspec'] < 0.5) & (df['zspec'] > 0)) ]) )
+    # print('number of gals with zspec outside redshift range:', len( df[ ((df['ZSPEC'] > 3)) |
+    #                                                                    ((df['ZSPEC'] < 0.5) & (df['ZSPEC'] > 0)) ]) )
     
     # reset index
     df = df.reset_index(drop=True)
@@ -167,15 +176,12 @@ def draw_z(df, field): # <20 min for one field
         draw1 = random.choice(pdf1['z'], size=n, p=(pdf1['HB4']/sum1))
         
         # this is also where you could calculate Lx(z) and M(z)...
-        Mz = [df.loc[i, 'mass']] * n
+        Mz = [df.loc[i, 'MASS']] * n
         
-        ########################################
-        # if field == 'GDS':
-        #     LXz = [df.loc[i, 'AGN_flag']] * n
-        # else:
-        #     LXz = [df.loc[i, 'LX']] * n
-        LXz = [df.loc[i, 'LX']] * n
-        ########################################
+        ### SHOULD I INCLUDE THE K CORRECTION AS SHAH DOES ###
+        DL_mpc = cosmo.luminosity_distance(draw1) # in Mpc -> convert to cm
+        DL = DL_mpc.to(u.cm)
+        LXz = df.loc[i, 'FX'] * 4 * np.pi * DL**2
         
         # add entry into dictionary
         draw_z['gal_'+str(ID_str)+'_z'] = draw1
@@ -226,7 +232,7 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
         all_df['drawn_LX'] = LX_drawn
         # if there is a spec q on quality > 1, change drawn_z to spec_z
         ### WILL NEED TO THINK CAREFULLY ON HOW THIS EFFECTS DRAWN M AND LX ###
-        all_df.loc[ (all_df['q_zspec'] > 1) , 'drawn_z'] = all_df['zspec']
+        all_df.loc[ (all_df['Q_ZSPEC'] > 1) , 'drawn_z'] = all_df['ZSPEC']
         
     elif z_type == 's':
         # if we are choosing just photo-z's, stick with the draws
@@ -239,8 +245,8 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
         all_df['drawn_M'] = M_drawn
         all_df['drawn_LX'] = LX_drawn
         # make drawn_z the spec z and throw out the rest
-        all_df.loc[ (all_df['q_zspec'] > 1) , 'drawn_z'] = all_df['zspec']
-        all_df = all_df[ (all_df['q_zspec'] > 1) ]
+        all_df.loc[ (all_df['Q_ZSPEC'] > 1) , 'drawn_z'] = all_df['ZSPEC']
+        all_df = all_df[ (all_df['Q_ZSPEC'] > 1) ]
         
     ### CHECK THAT THE SPEC Z CUT WORKED ###
     # print(all_df['zspec'], all_df['q_zspec'], all_df['drawn_z'])
@@ -254,7 +260,7 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     all_df = all_df.reset_index(drop=True) # this probably means that previous results are hooplaa
         
     # match catalogs:
-    df_pos = SkyCoord(all_df['RAdeg'],all_df['DEdeg'],unit='deg')
+    df_pos = SkyCoord(all_df['RA'],all_df['DEC'],unit='deg')
     idxc, idxcatalog, d2d, d3d = df_pos.search_around_sky(df_pos, max_R_kpc)
     # idxc is INDEX of the item being searched around
     # idxcatalog is INDEX of all galaxies within arcsec
