@@ -51,20 +51,33 @@ def main():
     pool.close()
     pool.join()
     
+    print('Q_ZSPEC > 1 before')
+    print('average number of spec-z used in each iteration by field:')
+    print('GDS: {}'.format(all_data[0][1]))
+    print('EGS: {}'.format(all_data[1][1]))
+    print('COS: {}'.format(all_data[2][1]))
+    print('GDN: {}'.format(all_data[3][1]))
+    print('UDS: {}'.format(all_data[4][1]))
+
+    
     # endf = pd.DataFrame(all_data[0]['0'])
     # endf.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photoz_TEST.csv')
     
     # combine dfs for each iteration and save them as a csv file:
     # all_data will be 5 dictionaries... test:
-    GDS_dict = all_data[0]
-    EGS_dict = all_data[1]
-    COS_dict = all_data[2]
-    GDN_dict = all_data[3]
-    UDS_dict = all_data[4]
+    GDS_dict = all_data[0][0]
+    EGS_dict = all_data[1][0]
+    COS_dict = all_data[2][0]
+    GDN_dict = all_data[3][0]
+    UDS_dict = all_data[4][0]
     for it in GDS_dict:
         combined_df = pd.concat([GDS_dict[it], EGS_dict[it], COS_dict[it], GDN_dict[it], UDS_dict[it]])
         #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photoz_results/photoz_'+str(it)+'.csv')
-        combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/photo-specz_'+str(it)+'.csv')
+        
+        #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/q_zspec_gt_1_wAird/photo-specz_'+str(it)+'.csv')
+        #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/q_zspec_ge_1_wAird/photo-specz_'+str(it)+'.csv')
+        combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/q_zspec_gt_1/photo-specz_'+str(it)+'.csv')
+        
         #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/SUP_TEST.csv')
         #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/specz_results/specz_'+str(it)+'.csv')
     
@@ -92,12 +105,16 @@ def process_samples(field):
 #     # check that IDs are consistent then drop IDs
 #     df = df.drop(['id2'], axis=1)
     
+    
     # load in new catalogs
     with fits.open(PATH+'CANDELS_Catalogs/CANDELS.'+field+'.1018.Lx_best.wFx.fits') as data:
         df_data = np.array(data[1].data)
     # to fix endian error reading fits file
     df_fix = df_data.byteswap().newbyteorder()
     df = pd.DataFrame(df_fix)
+    
+    # # load in new catalogs w/Aird
+    # df = pd.read_csv(PATH+'CANDELS_Catalogs/CANDELS.'+field+'.1018.Lx_best.wFx_AIRD.csv')
 
 
     # throw away galaxies with PDF confidence intervals beyond redshift range
@@ -121,18 +138,24 @@ def process_samples(field):
     # create a dictionary to store dfs per each iteration
     field_dict = {}
     
+    # create a list to store spec_z counts and a dictionary to store averages
+    N_zspec_all = []
+    N_zspec = {}
     # loop through number of iterations:
     for it in range(0, len(draw_df_z)):
         print( 'CURRENT ITERATION - '+field, it )
         # calculate separation and delta V ----> might not need LX drop for this step... we'll see
-        #results = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'p', field)
-        results = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'ps', field)
-        #results = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 's', field)
+        #results, zspec_count = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'p', field)
+        results, zspec_count = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'ps', field)
+        #results, zspec_count = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 's', field)
         
+        N_zspec_all.append(zspec_count)
         # add dataframe to the dictionary
         field_dict[str(it)] = results
     
-    return field_dict
+    N_zspec[field] = np.mean(N_zspec_all)
+    
+    return field_dict, N_zspec
     
 # -------------------------------------------------------------------------------------------------------------------------- #
 
@@ -258,6 +281,8 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     all_df = all_df[ (all_df['drawn_z'] >= 0.5) & (all_df['drawn_z'] <= 3.0) ]
     # reset this index:
     all_df = all_df.reset_index(drop=True) # this probably means that previous results are hooplaa
+    # keep track of how many spec-z's were used each time
+    zspec_count = len(all_df.loc[ all_df['Q_ZSPEC'] > 1 ])
         
     # match catalogs:
     df_pos = SkyCoord(all_df['RA'],all_df['DEC'],unit='deg')
@@ -544,7 +569,7 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     true_pairs['partner_control2_cat_ID'] = idx22_cid
 
 
-    return true_pairs
+    return true_pairs, zspec_count
     
     
     
