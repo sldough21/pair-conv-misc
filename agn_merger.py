@@ -29,7 +29,9 @@ cosmo = FlatLambdaCDM(H0=70 * u.km / u.s / u.Mpc, Tcmb0=2.725 * u.K, Om0=0.3) # 
 R_kpc = cosmo.arcsec_per_kpc_proper(0.5) # arcsec/kpc at z=0.5
 max_R_kpc = (150*u.kpc * R_kpc) # in arcseconds ### this is the bug right here
 
-mass_lo = 8.5
+mass_lo = 8.5 # lower mass limit of the more massive galaxy in a pair that we want to consider
+n = 500 # number of draws
+gamma = 1.4 # for k correction calculation
 
 
 # -------------------------------------------------------------------------------------------------------------------------- #
@@ -72,11 +74,13 @@ def main():
     UDS_dict = all_data[4][0]
     for it in GDS_dict:
         combined_df = pd.concat([GDS_dict[it], EGS_dict[it], COS_dict[it], GDN_dict[it], UDS_dict[it]])
-        #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photoz_results/photoz_'+str(it)+'.csv')
+        combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photoz_results/photoz_'+str(it)+'.csv')
         
         #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/q_zspec_gt_1_wAird/photo-specz_'+str(it)+'.csv')
         #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/q_zspec_ge_1_wAird/photo-specz_'+str(it)+'.csv')
-        combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/q_zspec_gt_1/photo-specz_'+str(it)+'.csv')
+        #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/q_zspec_gt_1/photo-specz_'+str(it)+'.csv')
+        #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/q_zspec_gt_1_wAird_noFx/photo-specz_'+str(it)+'.csv')
+        
         
         #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/SUP_TEST.csv')
         #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/specz_results/specz_'+str(it)+'.csv')
@@ -107,14 +111,14 @@ def process_samples(field):
     
     
     # load in new catalogs
-    with fits.open(PATH+'CANDELS_Catalogs/CANDELS.'+field+'.1018.Lx_best.wFx.fits') as data:
-        df_data = np.array(data[1].data)
-    # to fix endian error reading fits file
-    df_fix = df_data.byteswap().newbyteorder()
-    df = pd.DataFrame(df_fix)
+    # with fits.open(PATH+'CANDELS_Catalogs/CANDELS.'+field+'.1018.Lx_best.wFx.fits') as data:
+    #     df_data = np.array(data[1].data)
+    # # to fix endian error reading fits file
+    # df_fix = df_data.byteswap().newbyteorder()
+    # df = pd.DataFrame(df_fix)
     
-    # # load in new catalogs w/Aird
-    # df = pd.read_csv(PATH+'CANDELS_Catalogs/CANDELS.'+field+'.1018.Lx_best.wFx_AIRD.csv')
+    # load in new catalogs w/Aird
+    df = pd.read_csv(PATH+'CANDELS_Catalogs/CANDELS.'+field+'.1018.Lx_best.wFx_AIRD.csv')
 
 
     # throw away galaxies with PDF confidence intervals beyond redshift range
@@ -145,8 +149,8 @@ def process_samples(field):
     for it in range(0, len(draw_df_z)):
         print( 'CURRENT ITERATION - '+field, it )
         # calculate separation and delta V ----> might not need LX drop for this step... we'll see
-        #results, zspec_count = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'p', field)
-        results, zspec_count = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'ps', field)
+        results, zspec_count = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'p', field)
+        #results, zspec_count = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'ps', field)
         #results, zspec_count = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 's', field)
         
         N_zspec_all.append(zspec_count)
@@ -193,18 +197,20 @@ def draw_z(df, field): # <20 min for one field
                                                   'Wuyts', 'HB4', 'mFDa4'], delimiter=' ')
 
         # draw the samples
-        n = 500 # number of draws
         sum1 = np.sum(pdf1['HB4'])
      
         draw1 = random.choice(pdf1['z'], size=n, p=(pdf1['HB4']/sum1))
         
         # this is also where you could calculate Lx(z) and M(z)...
         Mz = [df.loc[i, 'MASS']] * n
+        # LXz = [df.loc[i, 'LX']] * n
         
         ### SHOULD I INCLUDE THE K CORRECTION AS SHAH DOES ###
         DL_mpc = cosmo.luminosity_distance(draw1) # in Mpc -> convert to cm
         DL = DL_mpc.to(u.cm)
-        LXz = df.loc[i, 'FX'] * 4 * np.pi * DL**2
+        # calculate the k correction
+        kz = (1+draw1)**(gamma-2)
+        LXz = df.loc[i, 'FX'] * 4 * np.pi * (DL**2) * kz
         
         # add entry into dictionary
         draw_z['gal_'+str(ID_str)+'_z'] = draw1
