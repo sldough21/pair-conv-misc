@@ -33,6 +33,8 @@ mass_lo = 8.5 # lower mass limit of the more massive galaxy in a pair that we wa
 n = 500 # number of draws
 gamma = 1.4 # for k correction calculation
 
+z_type = 'ps'
+
 
 # -------------------------------------------------------------------------------------------------------------------------- #
 
@@ -74,7 +76,7 @@ def main():
     UDS_dict = all_data[4][0]
     for it in GDS_dict:
         combined_df = pd.concat([GDS_dict[it], EGS_dict[it], COS_dict[it], GDN_dict[it], UDS_dict[it]])
-        combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photoz_results/photoz_'+str(it)+'.csv')
+        # combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photoz_results/photoz_'+str(it)+'.csv')
         
         #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/q_zspec_gt_1_wAird/photo-specz_'+str(it)+'.csv')
         #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/q_zspec_ge_1_wAird/photo-specz_'+str(it)+'.csv')
@@ -149,9 +151,7 @@ def process_samples(field):
     for it in range(0, len(draw_df_z)):
         print( 'CURRENT ITERATION - '+field, it )
         # calculate separation and delta V ----> might not need LX drop for this step... we'll see
-        results, zspec_count = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'p', field)
-        #results, zspec_count = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 'ps', field)
-        #results, zspec_count = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], 's', field)
+        results, zspec_count = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], z_type, field)
         
         N_zspec_all.append(zspec_count)
         # add dataframe to the dictionary
@@ -261,7 +261,10 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
         all_df['drawn_LX'] = LX_drawn
         # if there is a spec q on quality > 1, change drawn_z to spec_z
         ### WILL NEED TO THINK CAREFULLY ON HOW THIS EFFECTS DRAWN M AND LX ###
-        all_df.loc[ (all_df['Q_ZSPEC'] > 1) , 'drawn_z'] = all_df['ZSPEC']
+        all_df.loc[ (all_df['Q_ZSPEC'] > 1) , 'drawn_z'] = all_df['ZSPEC']   
+        all_df.loc[ (all_df['Q_ZSPEC'] > 1) , 'drawn_LX'] = ( all_df['FX'] * 4 * np.pi *
+                                                            ((cosmo.luminosity_distance(all_df['drawn_z']).to(u.cm))**2) * 
+                                                            ((1+all_df['drawn_z'])**(gamma-2)) )
         
     elif z_type == 's':
         # if we are choosing just photo-z's, stick with the draws
@@ -275,6 +278,9 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
         all_df['drawn_LX'] = LX_drawn
         # make drawn_z the spec z and throw out the rest
         all_df.loc[ (all_df['Q_ZSPEC'] > 1) , 'drawn_z'] = all_df['ZSPEC']
+        all_df.loc[ (all_df['Q_ZSPEC'] > 1) , 'drawn_LX'] = ( all_df['FX'] * 4 * np.pi *
+                                                            ((cosmo.luminosity_distance(all_df['drawn_z']).to(u.cm))**2) * 
+                                                            ((1+all_df['drawn_z'])**(gamma-2)) )
         all_df = all_df[ (all_df['Q_ZSPEC'] > 1) ]
         
     ### CHECK THAT THE SPEC Z CUT WORKED ###
