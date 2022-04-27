@@ -33,6 +33,8 @@ mass_lo = 8.5 # lower mass limit of the more massive galaxy in a pair that we wa
 n = 500 # number of draws
 gamma = 1.4 # for k correction calculation
 
+max_sep = 150 # kpc
+
 z_type = 'ps'
 
 
@@ -355,7 +357,7 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     pair_df['kpc_sep'] = (pair_df['arc_sep']) / cosmo.arcsec_per_kpc_proper(all_df.loc[pair_df['prime_index'], 'drawn_z'])
         
     #print('before true pairs:', len(pair_df))
-    true_pairs = pair_df[ (pair_df['kpc_sep'] <= 100*u.kpc) & (abs(pair_df['dv']) <= 1000) ]
+    true_pairs = pair_df[ (pair_df['kpc_sep'] <= max_sep*u.kpc) & (abs(pair_df['dv']) <= 1000) ]
     #print(true_pairs)
     
     ### ADD MASS LIMIT CUT NOW TO TRUE PAIRS, BC WE WILL NEED TO MATCH THE SMALLER GALS IN OUR ISO GROUP
@@ -616,8 +618,8 @@ def get_control(control_mass, control_z, mass, redshift, N_control=2, zfactor=0.
         mmax = m+np.log10(mfactor)
 
         # create a dataframe for possible matches
-        cmatch_df = all_iso_df[ (all_iso_df['z'] >= zmin) & (all_iso_df['z'] <= zmax) & (all_iso_df['mass'] >= mmin) &
-                               (all_iso_df['mass'] <= mmax) ]
+        cmatch_df = all_iso_df #[ (all_iso_df['z'] >= zmin) & (all_iso_df['z'] <= zmax) & (all_iso_df['mass'] >= mmin) &
+                               #(all_iso_df['mass'] <= mmax) ]
         
         # create columns for difference between z/mass control and pair z/m
         cmatch_df['dif'] = (cmatch_df['z'] - z)**2 + (cmatch_df['mass'] - m) **2
