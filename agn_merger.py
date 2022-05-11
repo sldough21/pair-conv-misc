@@ -35,7 +35,7 @@ mass_lo = 8.5 # lower mass limit of the more massive galaxy in a pair that we wa
 n = 500 # number of draws
 gamma = 1.4 # for k correction calculation
 
-max_sep = 150 # kpc
+max_sep = 100 # kpc
 max_iso = 5000 # dv
 
 z_type = 'ps'
@@ -82,14 +82,14 @@ def main():
     COS_dict = all_data[2][0]
     GDN_dict = all_data[3][0]
     UDS_dict = all_data[4][0]
-
+    
     for it in GDS_dict:
         combined_df = pd.concat([GDS_dict[it], EGS_dict[it], COS_dict[it], GDN_dict[it], UDS_dict[it]])
 
         if z_type == 'p':
-            combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photoz_results/photoz_'+str(it)+'.csv')
+            combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photoz_results/kpc'+str(max_sep)+'/'+str(it)+'.csv')
         if z_type == 'ps':
-            combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/kpc150/'+str(it)+'.csv')
+            combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/kpc'+str(max_sep)+'/'+str(it)+'.csv')
             #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/q_zspec_ge_1_wAird/photo-specz_'+str(it)+'.csv')
             #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/q_zspec_gt_1/photo-specz_'+str(it)+'.csv')
             #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/q_zspec_gt_1_wAird_noFx/photo-specz_'+str(it)+'.csv')
@@ -131,11 +131,20 @@ def process_samples(field):
     # load in new catalogs w/Aird
     df = pd.read_csv(PATH+'CANDELS_Catalogs/CANDELS.'+field+'.1018.Lx_best.wFx_AIRD.csv')
 
-
     # throw away galaxies with PDF confidence intervals beyond redshift range
     #df = df.drop(df[ (df['zlo'] > 3.5) | (df['zhi'] < 0.25) ].index)
     # make additional quality cuts -> make cut on mass log(M) = 1 below limit to get pairs below mass limit
-    df = df[ (df['CLASS_STAR'] < 0.9) & (df['PHOTFLAG'] == 0) & (df['MASS'] > (mass_lo-1)) ]
+    if z_type != 'p':
+        if field != 'COS':
+            zspec = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/zspec_cats/'+field+'/ALL_CANDELS_zcat_'+field+'_zspec.csv')
+            df['ZSPEC'] = zspec['G_ZSPEC']
+        df = df[ (df['CLASS_STAR'] < 0.9) & (df['PHOTFLAG'] == 0) & (df['MASS'] > (mass_lo-1)) ] ### & (df['ZSPEC'] > 0) ###
+    else:                                                                                        ### think about this later
+        df = df[ (df['CLASS_STAR'] < 0.9) & (df['PHOTFLAG'] == 0) & (df['MASS'] > (mass_lo-1)) ]
+    
+    ### THIS SHOULD MAKE IT SO IN 'PS' THE ONES WITH SPEC Z'S SHOULDN'T BE EXCLUDED ### ^^^ ###
+    ### WILL NEED TO MAKE MY SPEC-ZS CONSISTENT ACROSS FIELDS THO
+    
     
     # check for the spec-z exception and count:
     # print('number of gals with zspec outside redshift range:', len( df[ ((df['ZSPEC'] > 3)) |
@@ -184,7 +193,7 @@ def draw_z(df, field): # <20 min for one field
     draw_M = {}
     draw_LX = {}
     
-    for i in range(0, len(df['ID'])):
+    for i in range(0, len(df['ID'])): ### THIS BREAKS FOR GDN ### <-- no should be fine actually
         # load PDFs based on string ID
         ID_str = df.loc[i,'ID']
         if len(str(ID_str)) == 1: id_string = '0000'+str(ID_str)
@@ -209,9 +218,9 @@ def draw_z(df, field): # <20 min for one field
                                                   'Wuyts', 'HB4', 'mFDa4'], delimiter=' ')
 
         # draw the samples
-        sum1 = np.sum(pdf1['HB4'])
+        sum1 = np.sum(pdf1['mFDa4'])
      
-        draw1 = random.choice(pdf1['z'], size=n, p=(pdf1['HB4']/sum1))
+        draw1 = random.choice(pdf1['z'], size=n, p=(pdf1['mFDa4']/sum1))
         
         # this is also where you could calculate Lx(z) and M(z)...
         Mz = [df.loc[i, 'MASS']] * n
@@ -273,10 +282,16 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
         all_df['drawn_LX'] = LX_drawn
         # if there is a spec q on quality > 1, change drawn_z to spec_z
         ### WILL NEED TO THINK CAREFULLY ON HOW THIS EFFECTS DRAWN M AND LX ###
-        all_df.loc[ (all_df['Q_ZSPEC'] > 1) , 'drawn_z'] = all_df['ZSPEC']   
-        all_df.loc[ (all_df['Q_ZSPEC'] > 1) , 'drawn_LX'] = ( all_df['FX'] * 4 * np.pi *
-                                                            ((cosmo.luminosity_distance(all_df['drawn_z']).to(u.cm))**2) * 
-                                                            ((1+all_df['drawn_z'])**(gamma-2)) )
+        if field != 'COS':
+            all_df.loc[ (all_df['ZSPEC'] > 0), 'drawn_z'] = all_df['ZSPEC']   
+            all_df.loc[ (all_df['ZSPEC'] > 0), 'drawn_LX'] = ( all_df['FX'] * 4 * np.pi *
+                                                                ((cosmo.luminosity_distance(all_df['drawn_z']).to(u.cm))**2) * 
+                                                                ((1+all_df['drawn_z'])**(gamma-2)) )
+        
+        #######
+        # before, GDN was good, and GDS was bad, and we were including some bad ones in the other field,
+        # so shouldn't expect such a drastic change
+        #######
         
     elif z_type == 's':
         # if we are choosing just photo-z's, stick with the draws
@@ -294,7 +309,7 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
                                                             ((cosmo.luminosity_distance(all_df['drawn_z']).to(u.cm))**2) * 
                                                             ((1+all_df['drawn_z'])**(gamma-2)) )
         all_df = all_df[ (all_df['Q_ZSPEC'] > 1) ]
-        
+    
         
     ### CHECK THAT THE SPEC Z CUT WORKED ###
     # print(all_df['zspec'], all_df['q_zspec'], all_df['drawn_z'])
@@ -315,7 +330,7 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     # reset this index:    
     all_df = all_df.reset_index(drop=True) # this probably means that previous results are hooplaa
     # keep track of how many spec-z's were used each time
-    zspec_count = len(all_df.loc[ all_df['Q_ZSPEC'] > 1 ])
+    zspec_count = len(all_df.loc[ all_df['ZSPEC'] > 0 ])
         
     # match catalogs:
     df_pos = SkyCoord(all_df['RA'],all_df['DEC'],unit='deg')
