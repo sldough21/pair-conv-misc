@@ -22,7 +22,7 @@ from astropy.io import fits
 
 from numpy import random
 
-import matplotlib.pyplot as plt
+import sys
 
 PATH = '/nobackup/c1029594/CANDELS_AGN_merger_data/COSMOS_data/'
 
@@ -34,232 +34,86 @@ max_R_kpc = (150*u.kpc * R_kpc) # in arcseconds ### this is the bug right here
 mass_lo = 8.5 # lower mass limit of the more massive galaxy in a pair that we want to consider
 n = 500 # number of draws
 gamma = 1.4 # for k correction calculation
+max_sep = 150 # kpc
+max_iso = 5000
 
-z_type = 'ps' # for what redshifts to use in determine_pairs()
+z_type = 'p' # I know universal variables are bad but...
 
+# load my matched COSMOS catalog:
+df = pd.read_csv(PATH+'matched_COSMOS2020.csv')
+df = df[ (df['lp_type'] != 1) & (df['lp_type'] != -99) & (df['lp_mass_med'] > (mass_lo-1)) & 
+           (df['FLAG_COMBINED'] == 0)]
 
-# -------------------------------------------------------------------------------------------------------------------------- #
+# print('CHECK')
+# print(df.columns[8]) # could be reason matches fail...
 
+# good indices: get the rows from the drawn data csv based on df row selection
+gidx = df.index
+df = df.reset_index(drop=True)
 
-def main():
-    
-    print('beginning main()')
-    
-    # will need to parallelize COSMOS differently
-    # -> should start the parallization in process samples for determine_pairs()   
-    all_data = process_samples()
-    
-    print('Q_ZSPEC > 1 before')
-    print('average number of spec-z used in each iteration by field:')
-    print('GDS: {}'.format(all_data[0][1]))
-    print('EGS: {}'.format(all_data[1][1]))
-    print('COS: {}'.format(all_data[2][1]))
-    print('GDN: {}'.format(all_data[3][1]))
-    print('UDS: {}'.format(all_data[4][1]))
-
-    
-    # endf = pd.DataFrame(all_data[0]['0'])
-    # endf.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photoz_TEST.csv')
-    
-    # combine dfs for each iteration and save them as a csv file:
-    # all_data will be 5 dictionaries... test:
-    GDS_dict = all_data[0][0]
-    EGS_dict = all_data[1][0]
-    COS_dict = all_data[2][0]
-    GDN_dict = all_data[3][0]
-    UDS_dict = all_data[4][0]
-    for it in GDS_dict:
-        combined_df = pd.concat([GDS_dict[it], EGS_dict[it], COS_dict[it], GDN_dict[it], UDS_dict[it]])
-        combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photoz_results/photoz_'+str(it)+'.csv')
-        
-        #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/q_zspec_gt_1_wAird/photo-specz_'+str(it)+'.csv')
-        #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/q_zspec_ge_1_wAird/photo-specz_'+str(it)+'.csv')
-        #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/q_zspec_gt_1/photo-specz_'+str(it)+'.csv')
-        #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/q_zspec_gt_1_wAird_noFx/photo-specz_'+str(it)+'.csv')
-        
-        
-        #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/SUP_TEST.csv')
-        #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/specz_results/specz_'+str(it)+'.csv')
-    
-    print('files written!')
-        
-    
-    # for now, run things without pooling -> easier to read errors
-    # process_samples('GDS')
-    
-# -------------------------------------------------------------------------------------------------------------------------- #
-
-    
-def process_samples():
-    # this is essentially the main function but for each field, to be combined and saved as csv's upon completion
-    print('beginning process_samples()')
-    
-    
-    # load my matched COSMOS catalog:
-    df = pd.read_csv(PATH+'matched_COSMOS2020.csv')
-    
-
-    # throw away galaxies with PDF confidence intervals beyond redshift range
-    # I have photometric percentiles in COSMOS2020, but no an optional step -> depends on how long it all takes
-    #df = df.drop(df[ (df['zlo'] > 3.5) | (df['zhi'] < 0.25) ].index)
-    
-    # make additional quality cuts -> make cut on mass log(M) = 1 below limit to get pairs below mass limit
-    ### lp_type is the quality flag for stars or artefacts, sure there are other standard ones to do
-    df = df[ (df['CLASS_STAR'] < 0.9) & (df['PHOTFLAG'] == 0) & (df['MASS'] > (mass_lo-1)) ]
-    
-    # check for the spec-z exception and count:
-    # print('number of gals with zspec outside redshift range:', len( df[ ((df['ZSPEC'] > 3)) |
-    #                                                                    ((df['ZSPEC'] < 0.5) & (df['ZSPEC'] > 0)) ]) )
-    
-    # reset index
-    df = df.reset_index(drop=True)
-    
-    ##### SMALLER SAMPLE SIZE FOR TEST #####
-    # df = df.iloc[0:500]
-    
-    # draw n galaxies for each galaxy and calculate Lx(z) and M(z)
-    draw_df_z, draw_df_M, draw_df_LX = draw_z(df)
-    
-    # create a dictionary to store dfs per each iteration
-    field_dict = {}
-    
-    # create a list to store spec_z counts and a dictionary to store averages
-    N_zspec_all = []
-    N_zspec = {}
-    
-    ### Create a multiprocessing Pool ###
-    pool = Pool(10)  
-    results = pool.map(functools.partial(determine_pairs, all_df=df, current_zdraw_df=draw_df_z, 
-                                         current_Mdraw_df=draw_df_M, current_LXdraw_df=draw_df_LX, z_type), range(0, len(draw_df_z)))
-    # close pool
-    pool.close()
-    pool.join()
-    
-    #####################################
-    # but how do I pass 
-
-    field_dict[str(it)] = results # <---- gotta keep this consistent as well
-    
-    return field_dict #, N_z
-    
-# -------------------------------------------------------------------------------------------------------------------------- #
-
-    
-def draw_z(df): # <20 min for one field
-    print('Running draw_z for COSMOS')
-    
-    # initialize dictionary
-    draw_z = {}
-    draw_M = {}
-    draw_LX = {}
-    
-    # the LePhare PDFs are a but different:
-    # will look into properly indexing them in a notebook...
-    
-    for i in tqdm(range(0, len(df['ID']))):
-        # load PDFs based on string ID
-        ID_str = df.loc[i,'ID']
-        if len(str(ID_str)) == 1: id_string = '0000'+str(ID_str)
-        if len(str(ID_str)) == 2: id_string = '000'+str(ID_str)
-        if len(str(ID_str)) == 3: id_string = '00'+str(ID_str)
-        if len(str(ID_str)) == 4: id_string = '0'+str(ID_str)
-        if len(str(ID_str)) == 5: id_string = str(ID_str)
-
-        if field == "GDS":
-            pdf_filename1 = '/nobackup/c1029594/CANDELS_AGN_merger_data/Data - All Fields/GOODSS_OPTIMIZED03/ALL_OPTIMIZED_PDFS_GOODSS_ID'+id_string+'.pzd'
-        elif field == "EGS":
-            pdf_filename1 = '/nobackup/c1029594/CANDELS_AGN_merger_data/Data - All Fields/EGS_OPTIMIZED03/ALL_OPTIMIZED_PDFS_EGS_ID'+id_string+'.pzd'
-        elif field == "GDN":
-            pdf_filename1 = '/nobackup/c1029594/CANDELS_AGN_merger_data/Data - All Fields/GOODSN_OPTIMIZED03/ALL_OPTIMIZED_PDFS_GOODSN_ID'+id_string+'.pzd'
-        elif field == "COS":
-            pdf_filename1 = '/nobackup/c1029594/CANDELS_AGN_merger_data/Data - All Fields/COSMOS_OPTIMIZED03/ALL_OPTIMIZED_PDFS_COSMOS_ID'+id_string+'.pzd'
-        elif field == "UDS":
-            pdf_filename1 = '/nobackup/c1029594/CANDELS_AGN_merger_data/Data - All Fields/UDS_OPTIMIZED03/ALL_OPTIMIZED_PDFS_UDS_ID'+id_string+'.pzd' 
-
-        # read the PDFs
-        pdf1 = pd.read_csv(pdf_filename1, comment='#', names=['z', 'Finkelstein', 'Fontana', 'Pforr', 'Salvato', 'Wiklind',
-                                                  'Wuyts', 'HB4', 'mFDa4'], delimiter=' ')
-
-        # draw the samples
-        sum1 = np.sum(pdf1['HB4'])
-     
-        draw1 = random.choice(pdf1['z'], size=n, p=(pdf1['HB4']/sum1))
-        
-        # this is also where you could calculate Lx(z) and M(z)...
-        Mz = [df.loc[i, 'MASS']] * n
-        # LXz = [df.loc[i, 'LX']] * n
-        
-        ### SHOULD I INCLUDE THE K CORRECTION AS SHAH DOES ###
-        DL_mpc = cosmo.luminosity_distance(draw1) # in Mpc -> convert to cm
-        DL = DL_mpc.to(u.cm)
-        # calculate the k correction
-        kz = (1+draw1)**(gamma-2)
-        LXz = df.loc[i, 'FX'] * 4 * np.pi * (DL**2) * kz
-        
-        # add entry into dictionary
-        draw_z['gal_'+str(ID_str)+'_z'] = draw1
-        draw_M['gal_'+str(ID_str)+'_M'] = Mz
-        draw_LX['gal_'+str(ID_str)+'_LX'] = LXz
-    
-    # convert dictionary to dataframe with gal ID as columns and redshift selections are rows
-    draw_df_z = pd.DataFrame.from_dict(draw_z)
-    draw_df_M = pd.DataFrame.from_dict(draw_M)
-    draw_df_LX = pd.DataFrame.from_dict(draw_LX)
-    
-    ### 0 #######################################################################################################
-    # I want to save these draws for GDS and work through the rest of the code with them
-    # draw_df_z.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/test_output/drawn_z.csv', index=False)
-    # draw_df_M.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/test_output/drawn_M.csv', index=False)
-    # draw_df_LX.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/test_output/drawn_LX.csv', index=False)
-    # print('WRITTEN')
-    
-    return draw_df_z, draw_df_M, draw_df_LX
+### NOTE ###
+# the drawn data has no cuts, so I will need to cut what gets loaded in below -> use same cuts as above
+### NOTE ###
 
 
-# -------------------------------------------------------------------------------------------------------------------------- #
-
-
-def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_df, z_type, itr):
+def determine_pairs(itr):
     ### 1 #######################################################################################################
+    print('CURRENT ITERATION: {}'.format(itr))
+    all_df = df
     if z_type == 'p':
         # if we are choosing just photo-z's, stick with the draws
-        # add current z to the all_df dataframe, but first check for consistent lengths:
-        z_drawn = current_zdraw_df.to_numpy()
-        M_drawn = current_Mdraw_df.to_numpy()
-        LX_drawn = current_LXdraw_df.to_numpy()
+        # bc we are trying to parallelize this, read in one specific column at a time to ave space
+        z_df = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/COSMOS_data/draw_df_z.csv', usecols=[itr], dtype=float)
+        z_drawn = np.array(z_df[str(itr)])
+        z_M = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/COSMOS_data/draw_df_M.csv', dtype=float)
+        M_drawn = np.array(z_M['0'])
+        LX_df = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/COSMOS_data/draw_df_LX.csv', usecols=[itr], dtype=float)
+        LX_drawn = np.nan_to_num(np.array(LX_df[str(itr)]))   
         #print('checking length of drawn z list')
-        all_df['drawn_z'] = z_drawn
-        all_df['drawn_M'] = M_drawn
-        all_df['drawn_LX'] = LX_drawn
+        all_df['drawn_z'] = z_drawn[gidx]
+        all_df['drawn_M'] = M_drawn[gidx]
+        all_df['drawn_LX'] = LX_drawn[gidx]
         
     ### BUILD STRUCTURE FOR z_type = 'phot+spec_z' ###
     elif z_type == 'ps':
-        # if we are choosing just photo-z's, stick with the draws
-        # add current z to the all_df dataframe
-        z_drawn = current_zdraw_df.to_numpy()
-        M_drawn = current_Mdraw_df.to_numpy()
-        LX_drawn = current_LXdraw_df.to_numpy()
-        #print('checking length of drawn z list')
-        all_df['drawn_z'] = z_drawn
-        all_df['drawn_M'] = M_drawn
-        all_df['drawn_LX'] = LX_drawn
+        # bc we are trying to parallelize this, read in one specific column at a time to ave space
+        z_df = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/COSMOS_data/draw_df_z.csv', usecols=[itr], dtype=float)
+        z_drawn = np.array(z_df[str(itr)])
+        z_M = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/COSMOS_data/draw_df_M.csv', dtype=float)
+        M_drawn = np.array(z_M['0'])
+        LX_df = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/COSMOS_data/draw_df_LX.csv', usecols=[itr], dtype=float)
+        LX_drawn = np.nan_to_num(np.array(LX_df[str(itr)]))        
+        all_df['drawn_z'] = z_drawn[gidx]
+        all_df['drawn_M'] = M_drawn[gidx]
+        all_df['drawn_LX'] = LX_drawn[gidx]
         # if there is a spec q on quality > 1, change drawn_z to spec_z
         ### WILL NEED TO THINK CAREFULLY ON HOW THIS EFFECTS DRAWN M AND LX ###
-        all_df.loc[ (all_df['Q_ZSPEC'] > 1) , 'drawn_z'] = all_df['ZSPEC']
+        all_df.loc[ (all_df['q_zspec'] > 1) , 'drawn_z'] = all_df['zspec']   
+        all_df.loc[ (all_df['q_zspec'] > 1) , 'drawn_LX'] = ( all_df['F0.5-10_2015'] * 4 * np.pi *
+                                                            ((cosmo.luminosity_distance(all_df['drawn_z']).to(u.cm))**2) * 
+                                                            ((1+all_df['drawn_z'])**(gamma-2)) )
         
     elif z_type == 's':
         # if we are choosing just photo-z's, stick with the draws
         # add current z to the all_df dataframe
-        z_drawn = current_zdraw_df.to_numpy()
-        M_drawn = current_Mdraw_df.to_numpy()
-        LX_drawn = current_LXdraw_df.to_numpy()
-        #print('checking length of drawn z list')
-        all_df['drawn_z'] = z_drawn
-        all_df['drawn_M'] = M_drawn
-        all_df['drawn_LX'] = LX_drawn
+        z_df = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/COSMOS_data/draw_df_z.csv', usecols=[itr], dtype=float)
+        z_drawn = np.array(z_df[str(itr)])
+        z_M = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/COSMOS_data/draw_df_M.csv', dtype=float)
+        M_drawn = np.array(z_M['0'])
+        LX_df = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/COSMOS_data/draw_df_LX.csv', usecols=[itr], dtype=float)
+        LX_drawn = np.nan_to_num(np.array(LX_df[str(itr)]))  
+        all_df['drawn_z'] = z_drawn[gidx]
+        all_df['drawn_M'] = M_drawn[gidx]
+        all_df['drawn_LX'] = LX_drawn[gidx]
         # make drawn_z the spec z and throw out the rest
-        all_df.loc[ (all_df['Q_ZSPEC'] > 1) , 'drawn_z'] = all_df['ZSPEC']
-        all_df = all_df[ (all_df['Q_ZSPEC'] > 1) ]
+        all_df.loc[ (all_df['q_zspec'] > 1) , 'drawn_z'] = all_df['zspec']   
+        all_df.loc[ (all_df['q_zspec'] > 1) , 'drawn_LX'] = ( all_df['F0.5-10_2015'] * 4 * np.pi *
+                                                            ((cosmo.luminosity_distance(all_df['drawn_z']).to(u.cm))**2) * 
+                                                            ((1+all_df['drawn_z'])**(gamma-2)) )
+        all_df = all_df[ (all_df['q_zspec'] > 1) ]
+        
+        
+    # print('running iteration {}'.format(itr))
         
     ### CHECK THAT THE SPEC Z CUT WORKED ###
     # print(all_df['zspec'], all_df['q_zspec'], all_df['drawn_z'])
@@ -272,10 +126,11 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     # reset this index:
     all_df = all_df.reset_index(drop=True) # this probably means that previous results are hooplaa
     # keep track of how many spec-z's were used each time
-    zspec_count = len(all_df.loc[ all_df['Q_ZSPEC'] > 1 ])
+    zspec_count = len(all_df.loc[ all_df['q_zspec'] > 1 ])
+
         
     # match catalogs:
-    df_pos = SkyCoord(all_df['RA'],all_df['DEC'],unit='deg')
+    df_pos = SkyCoord(all_df['ALPHA_J2000'],all_df['DELTA_J2000'],unit='deg')
     idxc, idxcatalog, d2d, d3d = df_pos.search_around_sky(df_pos, max_R_kpc)
     # idxc is INDEX of the item being searched around
     # idxcatalog is INDEX of all galaxies within arcsec
@@ -333,8 +188,7 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     pair_df['kpc_sep'] = (pair_df['arc_sep']) / cosmo.arcsec_per_kpc_proper(all_df.loc[pair_df['prime_index'], 'drawn_z'])
         
     #print('before true pairs:', len(pair_df))
-    true_pairs = pair_df[ (pair_df['kpc_sep'] <= 100*u.kpc) & (abs(pair_df['dv']) <= 1000) ]
-    #print(true_pairs)
+    true_pairs = pair_df[ (pair_df['kpc_sep'] <= max_sep*u.kpc) & (abs(pair_df['dv']) <= 1000) ]
     
     ### ADD MASS LIMIT CUT NOW TO TRUE PAIRS, BC WE WILL NEED TO MATCH THE SMALLER GALS IN OUR ISO GROUP
     # n, bins, patches = plt.hist(all_df.loc[ true_pairs['prime_index'], 'drawn_M' ], bins=50, histtype='step')
@@ -353,7 +207,7 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     ### 6 #######################################################################################################
     # add galaxies that aren't pairs into the isolated sample:
     #iso_add = (pair_df[ (pair_df['kpc_sep'] > 100*u.kpc) | (abs(pair_df['dv']) > 10000) ])
-    iso_add = (pair_df[ (abs(pair_df['dv']) > 20000) ])
+    iso_add = (pair_df[ (abs(pair_df['dv']) > max_iso) ])
 
     # just stack prime and partner indices into massive array:
     iso_add_idx = np.concatenate( (np.array(iso_add['prime_index']), np.array(iso_add['partner_index'])), axis=0)
@@ -416,6 +270,7 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     true_pairs['partner_drawn_z'] = np.array(all_df.loc[true_pairs['partner_index'], 'drawn_z'])
     true_pairs['partner_drawn_M'] = np.array(all_df.loc[true_pairs['partner_index'], 'drawn_M'])
     true_pairs['partner_drawn_LX'] = np.array(all_df.loc[true_pairs['partner_index'], 'drawn_LX'])
+    
     
     # Dealing with missing data (ie 'nan')
     # must be a better way to do this without a for loop...
@@ -549,7 +404,7 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     # print('THEY ARE SEPARATE')
     # # print(post_all_pair)
     # print(post_all_con)
-    true_pairs['field'] = [field]*len(true_pairs)
+    true_pairs['field'] = ['COSMOS']*len(true_pairs)
     true_pairs['prime_cat_ID'] = np.array(all_df.loc[ true_pairs['prime_index'], 'ID' ])
     true_pairs['partner_cat_ID'] = np.array(all_df.loc[ true_pairs['partner_index'], 'ID' ])
     
@@ -559,13 +414,26 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     true_pairs['partner_control2_cat_ID'] = idx22_cid
 
 
-    return true_pairs#, zspec_count
+    if z_type == 'p':
+        true_pairs.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/COSMOS/photoz/kpc'+str(max_sep)+'/'+str(itr)+'.csv',
+                            index=False)
+        print('saved no. {}'.format(itr))
+    
+    if z_type == 'ps':
+        true_pairs.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/COSMOS/photo-specz/kpc'+str(max_sep)+'/'+str(itr)+'.csv',
+                           index=False)
+        print('saved no. {}'.format(itr))
+
+    if z_type == 's':
+        print('SAVED')
+        true_pairs.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/COSMOS/specz/kpc'+str(max_sep)+'/'+str(itr)+'.csv',
+                           index=False)
     
     
     
 # -------------------------------------------------------------------------------------------------------------------------- #
 
-def get_control(control_mass, control_z, mass, redshift, N_control=2, zfactor=0.1, mfactor=1.25): 
+def get_control(control_mass, control_z, mass, redshift, N_control=2, zfactor=0.2, mfactor=2): 
 
     dz = zfactor
     
@@ -635,4 +503,28 @@ def get_control(control_mass, control_z, mass, redshift, N_control=2, zfactor=0.
 
 
 if __name__ == '__main__':
-    main()
+    # create a dictionary to store dfs per each iteration
+    field_dict = {}
+    
+    # create a list to store spec_z counts and a dictionary to store averages
+    N_zspec_all = []
+    N_zspec = {}
+    
+    ### Create a multiprocessing Pool ###
+    if z_type == 's':
+        determine_pairs(itr=0)
+    else:
+        print('creating pool')
+        pool = Pool(8)  
+
+        print('running determine_pairs()')
+        pool.map(determine_pairs, range(0, n))
+
+        print('files written!')
+
+        # close pool
+        pool.close()
+        pool.join()
+
+    #field_dict[str(it)] = results # <---- gotta keep this consistent as well
+    
