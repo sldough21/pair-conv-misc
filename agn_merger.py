@@ -89,12 +89,10 @@ def main():
         if z_type == 'p':
             combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photoz_results/kpc'+str(max_sep)+'/'+str(it)+'.csv')
         if z_type == 'ps':
+            #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/kpc'+str(max_sep)+'/'+str(it)+'.csv')
             combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/kpc'+str(max_sep)+'/'+str(it)+'.csv')
-            #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/q_zspec_ge_1_wAird/photo-specz_'+str(it)+'.csv')
-            #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/q_zspec_gt_1/photo-specz_'+str(it)+'.csv')
-            #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/q_zspec_gt_1_wAird_noFx/photo-specz_'+str(it)+'.csv')
         if z_type == 's':
-            combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/specz_results/specz_'+str(it)+'.csv')
+            combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/specz_results/kpc'+str(max_sep)+'/'+str(it)+'.csv')
 
     print('files written!')
         
@@ -136,7 +134,8 @@ def process_samples(field):
     # make additional quality cuts -> make cut on mass log(M) = 1 below limit to get pairs below mass limit
     if z_type != 'p':
         if field != 'COS':
-            zspec = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/zspec_cats/'+field+'/ALL_CANDELS_zcat_'+field+'_zspec.csv')
+            zspec = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/zspec_cats/'+field+'/ALL_CANDELS_zcat_'+field+'_zspec_wAIRD.csv')
+            zspec.loc[zspec['ZSPEC_AIRD'] == zspec['ZBEST_AIRD'], 'G_ZSPEC'] = zspec['ZSPEC_AIRD'] # assuming this worked..
             df['ZSPEC'] = zspec['G_ZSPEC']
         df = df[ (df['CLASS_STAR'] < 0.9) & (df['PHOTFLAG'] == 0) & (df['MASS'] > (mass_lo-1)) ] ### & (df['ZSPEC'] > 0) ###
     else:                                                                                        ### think about this later
@@ -156,8 +155,8 @@ def process_samples(field):
     ##### SMALLER SAMPLE SIZE FOR TEST #####
     # df = df.iloc[0:200]
     
-    # draw 1000 galaxies for each galaxy and calculate Lx(z) and M(z)
-    draw_df_z, draw_df_M, draw_df_LX = draw_z(df, field)
+    # draw data for each galaxy and calculate Lx(z) and M(z)
+    draw_df_z, draw_df_M, draw_df_LX, draw_df_IR_AGN_DON, draw_df_IR_AGN_STR  = draw_z(df, field)
     
     # create a dictionary to store dfs per each iteration
     field_dict = {}
@@ -169,7 +168,8 @@ def process_samples(field):
     for it in range(0, len(draw_df_z)):
         print( 'CURRENT ITERATION - '+field, it )
         # calculate separation and delta V ----> might not need LX drop for this step... we'll see
-        results, zspec_count = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it], z_type, field)
+        results, zspec_count = determine_pairs(df, draw_df_z.iloc[it], draw_df_M.iloc[it], draw_df_LX.iloc[it],
+                                               draw_df_IR_AGN_DON.iloc[it], draw_df_IR_AGN_STR.iloc[it], z_type, field)
         
         N_zspec_all.append(zspec_count)
         # add dataframe to the dictionary
@@ -192,6 +192,8 @@ def draw_z(df, field): # <20 min for one field
     draw_z = {}
     draw_M = {}
     draw_LX = {}
+    draw_IR_AGN_DON = {}
+    draw_IR_AGN_STR = {}
     
     for i in range(0, len(df['ID'])): ### THIS BREAKS FOR GDN ### <-- no should be fine actually
         # load PDFs based on string ID
@@ -228,20 +230,64 @@ def draw_z(df, field): # <20 min for one field
         
         # calculate luminosity
         DL_mpc = cosmo.luminosity_distance(draw1) # in Mpc -> convert to cm
-        DL = DL_mpc.to(u.cm)
+        DL = DL_mpc.to(u.cm) # distance in cm
         # calculate the k correction
         kz = (1+draw1)**(gamma-2)
         LXz = df.loc[i, 'FX'] * 4 * np.pi * (DL**2) * kz
+        # classify as IR AGN, gotta be a 1 or 0 system
+        
+        # look at IR luminosities
+        if field == 'GDN':
+            f3p6 = df.loc[i, 'IRAC_CH1_SCANDELS_FLUX']
+            f4p5 = df.loc[i, 'IRAC_CH2_SCANDELS_FLUX']
+            f5p8 = df.loc[i, 'IRAC_CH3_FLUX']
+            f8p0 = df.loc[i, 'IRAC_CH4_FLUX']
+        else:
+            f3p6 = df.loc[i, 'IRAC_CH1_FLUX']
+            f4p5 = df.loc[i, 'IRAC_CH2_FLUX']
+            f5p8 = df.loc[i, 'IRAC_CH3_FLUX']
+            f8p0 = df.loc[i, 'IRAC_CH4_FLUX']
+            
+        if f3p6 <= 0 or f4p5 <= 0 or f5p8 <= 0 or f8p0 <= 0:
+            IR_AGN_DON = [0]*n
+            IR_AGN_STR = [0]*n
+        else:
+            x = np.log10(f5p8/f3p6)
+            y = np.log10(f8p0/f4p5)
+            F03p6 = 280.9 #±4.1 Jy
+            F04p5 = 179.7 #±2.6 Jy
+            F05p8 = 115.0 #±1.7 Jy
+            F08p0 = 64.9 #±0.9              # convert from mJy to Jy
+            mv3p6 = 2.5*np.log10(F03p6 / (f3p6/1000))
+            mv4p5 = 2.5*np.log10(F04p5 / (f4p5/1000))
+            mv5p8 = 2.5*np.log10(F05p8 / (f5p8/1000))
+            mv8p0 = 2.5*np.log10(F08p0 / (f8p0/1000))
+            if ((x >= 0.08) and (y >= 0.15) and (y >= (1.21*x)-0.27) and (y <= (1.21*x)+0.27) and 
+                (f4p5 > f3p6) and (f5p8 > f4p5) and (f8p0 > f5p8)):
+                IR_AGN_DON = [1]*n
+            else:
+                IR_AGN_DON = [0]*n
+            if ((mv5p8 - mv8p0 > 0.6) and (mv3p6 - mv4p5 > 0.2 * (mv5p8 - mv8p0) + 0.18) and 
+                (mv3p6 - mv4p5 > 2.5 * (mv5p8 - mv8p0) + 3.5)):
+                IR_AGN_STR = [1]*n
+            else:
+                IR_AGN_STR = [0]*n
+            
         
         # add entry into dictionary
         draw_z['gal_'+str(ID_str)+'_z'] = draw1
         draw_M['gal_'+str(ID_str)+'_M'] = Mz
         draw_LX['gal_'+str(ID_str)+'_LX'] = LXz
+        draw_IR_AGN_DON['gal_'+str(ID_str)+'_IR_AGN_DON'] = IR_AGN_DON
+        draw_IR_AGN_STR['gal_'+str(ID_str)+'_IR_AGN_STR'] = IR_AGN_STR
     
     # convert dictionary to dataframe with gal ID as columns and redshift selections are rows
     draw_df_z = pd.DataFrame.from_dict(draw_z)
     draw_df_M = pd.DataFrame.from_dict(draw_M)
     draw_df_LX = pd.DataFrame.from_dict(draw_LX)
+    draw_df_IR_AGN_DON = pd.DataFrame.from_dict(draw_IR_AGN_DON)
+    draw_df_IR_AGN_STR = pd.DataFrame.from_dict(draw_IR_AGN_STR)
+    
     
     ### 0 #######################################################################################################
     # I want to save these draws for GDS and work through the rest of the code with them
@@ -250,13 +296,14 @@ def draw_z(df, field): # <20 min for one field
     # draw_df_LX.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/test_output/drawn_LX.csv', index=False)
     # print('WRITTEN')
     
-    return draw_df_z, draw_df_M, draw_df_LX
+    return draw_df_z, draw_df_M, draw_df_LX, draw_df_IR_AGN_DON, draw_df_IR_AGN_STR
 
 
 # -------------------------------------------------------------------------------------------------------------------------- #
 
 
-def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_df, z_type, field):
+def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_df,
+                    current_IR_AGN_DON_draw_df, current_IR_AGN_STR_draw_df, z_type, field):
     ### 1 #######################################################################################################
     if z_type == 'p':
         # if we are choosing just photo-z's, stick with the draws
@@ -264,10 +311,13 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
         z_drawn = current_zdraw_df.to_numpy()
         M_drawn = current_Mdraw_df.to_numpy()
         LX_drawn = current_LXdraw_df.to_numpy()
-        #print('checking length of drawn z list')
+        IR_AGN_DON_drawn = current_IR_AGN_DON_draw_df.to_numpy()
+        IR_AGN_STR_drawn = current_IR_AGN_STR_draw_df.to_numpy()
         all_df['drawn_z'] = z_drawn
         all_df['drawn_M'] = M_drawn
         all_df['drawn_LX'] = LX_drawn
+        all_df['IR_AGN_DON'] = IR_AGN_DON_drawn
+        all_df['IR_AGN_STR'] = IR_AGN_STR_drawn
         
     ### BUILD STRUCTURE FOR z_type = 'phot+spec_z' ###
     elif z_type == 'ps':
@@ -276,10 +326,13 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
         z_drawn = current_zdraw_df.to_numpy()
         M_drawn = current_Mdraw_df.to_numpy()
         LX_drawn = current_LXdraw_df.to_numpy()
-        #print('checking length of drawn z list')
+        IR_AGN_DON_drawn = current_IR_AGN_DON_draw_df.to_numpy()
+        IR_AGN_STR_drawn = current_IR_AGN_STR_draw_df.to_numpy()
         all_df['drawn_z'] = z_drawn
         all_df['drawn_M'] = M_drawn
         all_df['drawn_LX'] = LX_drawn
+        all_df['IR_AGN_DON'] = IR_AGN_DON_drawn
+        all_df['IR_AGN_STR'] = IR_AGN_STR_drawn
         # if there is a spec q on quality > 1, change drawn_z to spec_z
         ### WILL NEED TO THINK CAREFULLY ON HOW THIS EFFECTS DRAWN M AND LX ###
         if field != 'COS':
@@ -288,27 +341,27 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
                                                                 ((cosmo.luminosity_distance(all_df['drawn_z']).to(u.cm))**2) * 
                                                                 ((1+all_df['drawn_z'])**(gamma-2)) )
         
-        #######
-        # before, GDN was good, and GDS was bad, and we were including some bad ones in the other field,
-        # so shouldn't expect such a drastic change
-        #######
-        
     elif z_type == 's':
         # if we are choosing just photo-z's, stick with the draws
         # add current z to the all_df dataframe
         z_drawn = current_zdraw_df.to_numpy()
         M_drawn = current_Mdraw_df.to_numpy()
         LX_drawn = current_LXdraw_df.to_numpy()
-        #print('checking length of drawn z list')
+        IR_AGN_DON_drawn = current_IR_AGN_DON_draw_df.to_numpy()
+        IR_AGN_STR_drawn = current_IR_AGN_STR_draw_df.to_numpy()
         all_df['drawn_z'] = z_drawn
         all_df['drawn_M'] = M_drawn
         all_df['drawn_LX'] = LX_drawn
+        all_df['IR_AGN_DON'] = IR_AGN_DON_drawn
+        all_df['IR_AGN_STR'] = IR_AGN_STR_drawn
         # make drawn_z the spec z and throw out the rest
-        all_df.loc[ (all_df['Q_ZSPEC'] > 1) , 'drawn_z'] = all_df['ZSPEC']
-        all_df.loc[ (all_df['Q_ZSPEC'] > 1) , 'drawn_LX'] = ( all_df['FX'] * 4 * np.pi *
-                                                            ((cosmo.luminosity_distance(all_df['drawn_z']).to(u.cm))**2) * 
-                                                            ((1+all_df['drawn_z'])**(gamma-2)) )
-        all_df = all_df[ (all_df['Q_ZSPEC'] > 1) ]
+        if field != 'COS':
+            all_df.loc[ (all_df['ZSPEC'] > 0), 'drawn_z'] = all_df['ZSPEC']
+            all_df.loc[ (all_df['ZSPEC'] > 0), 'drawn_LX'] = ( all_df['FX'] * 4 * np.pi *
+                                                                ((cosmo.luminosity_distance(all_df['drawn_z']).to(u.cm))**2) * 
+                                                                ((1+all_df['drawn_z'])**(gamma-2)) )
+            
+        all_df = all_df[ (all_df['ZSPEC'] >= 0) ] # will have to exculde COSMOS results
     
         
     ### CHECK THAT THE SPEC Z CUT WORKED ###
@@ -481,8 +534,13 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     
     middle_idx = len(controls)//2
     prime_controls = controls[:middle_idx]
+    c1prime_no99 = prime_controls[:,0][np.where(prime_controls[:,0] != -99)]
+    c2prime_no99 = prime_controls[:,1][np.where(prime_controls[:,1] != -99)]
     prime_flags = c_flag[:middle_idx]
+    
     partner_controls = controls[middle_idx:]
+    c1partner_no99 = partner_controls[:,0][np.where(partner_controls[:,0] != -99)]
+    c2partner_no99 = partner_controls[:,1][np.where(partner_controls[:,1] != -99)]
     partner_flags = c_flag[middle_idx:]
             
     # add prime control galaxies to true_pair df ----> reminder these are indices of all_df (CHECK -> pretty sure)
@@ -494,160 +552,88 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     
     # add other important data to the dataframe ====> all the drawn values 
     # worry about logical position in the df later
+    true_pairs['prime_cat_ID'] = np.array(all_df.loc[ true_pairs['prime_index'], 'ID' ])
     true_pairs['prime_drawn_z'] = np.array(all_df.loc[true_pairs['prime_index'], 'drawn_z'])
     true_pairs['prime_drawn_M'] = np.array(all_df.loc[true_pairs['prime_index'], 'drawn_M'])
     true_pairs['prime_drawn_LX'] = np.array(all_df.loc[true_pairs['prime_index'], 'drawn_LX'])
+    true_pairs['prime_IR_AGN_DON'] = np.array(all_df.loc[true_pairs['prime_index'], 'IR_AGN_DON'])
+    true_pairs['prime_IR_AGN_STR'] = np.array(all_df.loc[true_pairs['prime_index'], 'IR_AGN_STR'])
     
+    true_pairs['partner_cat_ID'] = np.array(all_df.loc[ true_pairs['partner_index'], 'ID' ])
     true_pairs['partner_drawn_z'] = np.array(all_df.loc[true_pairs['partner_index'], 'drawn_z'])
     true_pairs['partner_drawn_M'] = np.array(all_df.loc[true_pairs['partner_index'], 'drawn_M'])
     true_pairs['partner_drawn_LX'] = np.array(all_df.loc[true_pairs['partner_index'], 'drawn_LX'])
+    true_pairs['partner_IR_AGN_DON'] = np.array(all_df.loc[true_pairs['partner_index'], 'IR_AGN_DON'])
+    true_pairs['partner_IR_AGN_STR'] = np.array(all_df.loc[true_pairs['partner_index'], 'IR_AGN_STR'])
     
-    # Dealing with missing data (ie 'nan')
-    # must be a better way to do this without a for loop...
-    idx11_id=[]
-    idx11_cid=[]
-    idx11_z=[]
-    idx11_M=[]
-    idx11_LX=[]
-    idx12_id=[]
-    idx12_cid=[]
-    idx12_z=[]
-    idx12_M=[]           # could rewrite this to make it dynamic...
-    idx12_LX=[]
-    idx21_id=[]
-    idx21_cid=[]
-    idx21_z=[]
-    idx21_M=[]
-    idx21_LX=[]
-    idx22_id=[]
-    idx22_cid=[]
-    idx22_z=[]
-    idx22_M=[]
-    idx22_LX=[]
+    true_pairs['prime_control1_idx'] = prime_controls[:,0]
+    true_pairs['prime_control2_idx'] = prime_controls[:,1]
+    true_pairs['partner_control1_idx'] = partner_controls[:,0]
+    true_pairs['partner_control2_idx'] = partner_controls[:,1]
     
-    for idx11, idx12, idx21, idx22 in zip((prime_controls[:,0]), (prime_controls[:,1]), 
-                                         (partner_controls[:,0]), (partner_controls[:,1])):
-        
-        if idx11 < 0:
-            idx11_id.append( np.nan )
-            idx11_cid.append( np.nan )         # now that I've changed the control selection code, I should rethink this logic
-            idx11_z.append( np.nan )
-            idx11_M.append( np.nan )
-            idx11_LX.append( np.nan )
-        else:
-            idx11_id.append( idx11 )
-            idx11_cid.append( all_df.loc[idx11, 'ID'] )
-            idx11_z.append( all_df.loc[idx11, 'drawn_z'] )
-            idx11_M.append( all_df.loc[idx11, 'drawn_M'] )
-            idx11_LX.append( all_df.loc[idx11, 'drawn_LX'] )
-            
-        if idx12 < 0:
-            idx12_id.append( np.nan )
-            idx12_cid.append( np.nan )
-            idx12_z.append( np.nan )
-            idx12_M.append( np.nan )
-            idx12_LX.append( np.nan )
-        else:
-            idx12_id.append( idx12 )
-            idx12_cid.append( all_df.loc[idx12, 'ID'] )
-            idx12_z.append( all_df.loc[idx12, 'drawn_z'] )
-            idx12_M.append( all_df.loc[idx12, 'drawn_M'] )
-            idx12_LX.append( all_df.loc[idx12, 'drawn_LX'] )
-            
-        if  idx21 < 0:
-            idx21_id.append( np.nan )
-            idx21_cid.append( np.nan )
-            idx21_z.append( np.nan )
-            idx21_M.append( np.nan )
-            idx21_LX.append( np.nan )
-        else:
-            idx21_id.append( idx21 )
-            idx21_cid.append( all_df.loc[idx21, 'ID'] )
-            idx21_z.append( all_df.loc[idx21, 'drawn_z'] )
-            idx21_M.append( all_df.loc[idx21, 'drawn_M'] )
-            idx21_LX.append( all_df.loc[idx21, 'drawn_LX'] )
-            
-        if  idx22 < 0:
-            idx22_id.append( np.nan )
-            idx22_cid.append( np.nan )
-            idx22_z.append( np.nan )
-            idx22_M.append( np.nan )
-            idx22_LX.append( np.nan )
-        else:
-            idx22_id.append( idx22 )
-            idx22_cid.append( all_df.loc[idx22, 'ID'] )
-            idx22_z.append( all_df.loc[idx22, 'drawn_z'] )
-            idx22_M.append( all_df.loc[idx22, 'drawn_M'] )
-            idx22_LX.append( all_df.loc[idx22, 'drawn_LX'] )
-                                    
-    true_pairs['prime_control1_ID'] = idx11_id      
-    true_pairs['prime_control1_drawn_z'] = idx11_z
-    true_pairs['prime_control1_drawn_M'] = idx11_M
-    true_pairs['prime_control1_drawn_LX'] = idx11_LX
+    # prime galaxy control 1
+    true_pairs['prime_control1_cat_ID'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['prime_control1_idx'] != -99, 'prime_control1_cat_ID' ] = np.array(all_df.loc[ c1prime_no99, 'ID' ]) 
+    true_pairs['prime_control1_drawn_z'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['prime_control1_idx'] != -99, 'prime_control1_drawn_z' ] = np.array(all_df.loc[ c1prime_no99, 'drawn_z' ]) 
+    true_pairs['prime_control1_drawn_M'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['prime_control1_idx'] != -99, 'prime_control1_drawn_M' ] = np.array(all_df.loc[ c1prime_no99, 'drawn_M' ])  
+    true_pairs['prime_control1_drawn_LX'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['prime_control1_idx'] != -99, 'prime_control1_drawn_LX' ] = np.array(all_df.loc[ c1prime_no99, 'drawn_LX' ])  
+    true_pairs['prime_control1_IR_AGN_DON'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['prime_control1_idx'] != -99, 'prime_control1_IR_AGN_DON' ] = np.array(all_df.loc[ c1prime_no99, 'IR_AGN_DON' ]) 
+    true_pairs['prime_control1_IR_AGN_STR'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['prime_control1_idx'] != -99, 'prime_control1_IR_AGN_STR' ] = np.array(all_df.loc[ c1prime_no99, 'IR_AGN_STR' ]) 
     
-    true_pairs['prime_control2_ID'] = idx12_id 
-    true_pairs['prime_control2_drawn_z'] = idx12_z
-    true_pairs['prime_control2_drawn_M'] = idx12_M
-    true_pairs['prime_control2_drawn_LX'] = idx12_LX
+    # prime galaxy control 2
+    true_pairs['prime_control2_cat_ID'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['prime_control2_idx'] != -99, 'prime_control2_cat_ID' ] = np.array(all_df.loc[ c2prime_no99, 'ID' ]) 
+    true_pairs['prime_control2_drawn_z'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['prime_control2_idx'] != -99, 'prime_control2_drawn_z' ] = np.array(all_df.loc[ c2prime_no99, 'drawn_z' ]) 
+    true_pairs['prime_control2_drawn_M'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['prime_control2_idx'] != -99, 'prime_control2_drawn_M' ] = np.array(all_df.loc[ c2prime_no99, 'drawn_M' ])  
+    true_pairs['prime_control2_drawn_LX'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['prime_control2_idx'] != -99, 'prime_control2_drawn_LX' ] = np.array(all_df.loc[ c2prime_no99, 'drawn_LX' ])  
+    true_pairs['prime_control2_IR_AGN_DON'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['prime_control2_idx'] != -99, 'prime_control2_IR_AGN_DON' ] = np.array(all_df.loc[ c2prime_no99, 'IR_AGN_DON' ]) 
+    true_pairs['prime_control2_IR_AGN_STR'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['prime_control2_idx'] != -99, 'prime_control2_IR_AGN_STR' ] = np.array(all_df.loc[ c2prime_no99, 'IR_AGN_STR' ]) 
     
-    true_pairs['partner_control1_ID'] = idx21_id 
-    true_pairs['partner_control1_drawn_z'] = idx21_z
-    true_pairs['partner_control1_drawn_M'] = idx21_M
-    true_pairs['partner_control1_drawn_LX'] = idx21_LX
+    # partner galaxy control 1
+    true_pairs['partner_control1_cat_ID'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['partner_control1_idx'] != -99, 'partner_control1_cat_ID' ] = np.array(all_df.loc[ c1partner_no99, 'ID' ]) 
+    true_pairs['partner_control1_drawn_z'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['partner_control1_idx'] != -99, 'partner_control1_drawn_z' ] = np.array(all_df.loc[ c1partner_no99, 'drawn_z' ]) 
+    true_pairs['partner_control1_drawn_M'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['partner_control1_idx'] != -99, 'partner_control1_drawn_M' ] = np.array(all_df.loc[ c1partner_no99, 'drawn_M' ])  
+    true_pairs['partner_control1_drawn_LX'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['partner_control1_idx'] != -99, 'partner_control1_drawn_LX' ] = np.array(all_df.loc[ c1partner_no99, 'drawn_LX' ])  
+    true_pairs['partner_control1_IR_AGN_DON'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['partner_control1_idx'] != -99, 'partner_control1_IR_AGN_DON' ] = np.array(all_df.loc[ c1partner_no99, 'IR_AGN_DON' ]) 
+    true_pairs['partner_control1_IR_AGN_STR'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['partner_control1_idx'] != -99, 'partner_control1_IR_AGN_STR' ] = np.array(all_df.loc[ c1partner_no99, 'IR_AGN_STR' ]) 
     
-    true_pairs['partner_control2_ID'] = idx22_id 
-    true_pairs['partner_control2_drawn_z'] = idx22_z
-    true_pairs['partner_control2_drawn_M'] = idx22_M
-    true_pairs['partner_control2_drawn_LX'] = idx22_LX    
-    
+    # partner galaxy control 2
+    true_pairs['partner_control2_cat_ID'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['partner_control2_idx'] != -99, 'partner_control2_cat_ID' ] = np.array(all_df.loc[ c2partner_no99, 'ID' ]) 
+    true_pairs['partner_control2_drawn_z'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['partner_control2_idx'] != -99, 'partner_control2_drawn_z' ] = np.array(all_df.loc[ c2partner_no99, 'drawn_z' ]) 
+    true_pairs['partner_control2_drawn_M'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['partner_control2_idx'] != -99, 'partner_control2_drawn_M' ] = np.array(all_df.loc[ c2partner_no99, 'drawn_M' ])  
+    true_pairs['partner_control2_drawn_LX'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['partner_control2_idx'] != -99, 'partner_control2_drawn_LX' ] = np.array(all_df.loc[ c2partner_no99, 'drawn_LX' ])  
+    true_pairs['partner_control2_IR_AGN_DON'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['partner_control2_idx'] != -99, 'partner_control2_IR_AGN_DON' ] = np.array(all_df.loc[ c2partner_no99, 'IR_AGN_DON' ]) 
+    true_pairs['partner_control2_IR_AGN_STR'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['partner_control2_idx'] != -99, 'partner_control2_IR_AGN_STR' ] = np.array(all_df.loc[ c2partner_no99, 'IR_AGN_STR' ]) 
+
     true_pairs['prime_cflag1'] = prime_flags[:,0]
     true_pairs['prime_cflag2'] = prime_flags[:,1]
     true_pairs['partner_cflag1'] = partner_flags[:,0]
     true_pairs['partner_cflag2'] = partner_flags[:,1]
     
-    # plot histograms to see that distribution of mass and z is the same for pairs and samples:
-#     histp_z = np.concatenate( (np.array(true_pairs['prime_drawn_z']), np.array(true_pairs['partner_drawn_z'])), axis=0 )
-#     histp_M = np.concatenate( (np.array(true_pairs['prime_drawn_M']), np.array(true_pairs['partner_drawn_M'])), axis=0 )
     
-#     histc_z = np.concatenate( (np.array(idx11_z), np.array(idx12_z), np.array(idx21_z), np.array(idx22_z)), axis=0 )
-#     histc_M = np.concatenate( (np.array(idx11_M), np.array(idx12_M), np.array(idx21_M), np.array(idx22_M)), axis=0 )
-    
-    # histp_M = np.array(true_pairs['prime_drawn_M'])
-    # histc_M = np.concatenate( (np.array(idx11_M), np.array(idx12_M) ), axis=0)#, np.array(idx21_M), np.array(idx22_M)), axis=0 )
-    
-    # histp_M = np.array(true_pairs['partner_drawn_M'])
-    # histc_M = np.concatenate( (np.array(idx21_M), np.array(idx22_M) ), axis=0)#, np.array(idx21_M), np.array(idx22_M)), axis=0 )
-
-    # # may not be accurate until we have a better mass cut -> better pair to isolated sample
-    # plt.hist(histp_z, bins=50, density=True, histtype='step')
-    # plt.hist(histc_z, bins=50, density=True, histtype='step')
-    # plt.title(field)
-    # seems that there just aren't as many galaxies to match at high z, so control sample is currently biased towarads low z
-    # mass seems to be pretty tight tho
-    # potential solution is to bin then pick controls per bin, to all some duplicates in independent bins
-    # plt.show()
-    
-    # # test if there are du[licates here
-    # post_all_pair = np.concatenate( (np.array(true_pairs.loc[:, 'prime_index']), 
-    #                                                            np.array(true_pairs.loc[:, 'partner_index'])), axis=0 )
-    # post_all_con = np.concatenate( (np.array(true_pairs.loc[:, 'prime_control1_ID']), 
-    #                                                            np.array(true_pairs.loc[:, 'prime_control2_ID']),
-    #                                                        np.array(true_pairs.loc[:, 'partner_control1_ID']),
-    #                                                        np.array(true_pairs.loc[:, 'partner_control2_ID'])), axis=0 )
-    # for idx in post_all_pair:
-    #     if idx in post_all_con:
-    #         print('TRUEE DAT')
-    # print('THEY ARE SEPARATE')
-    # # print(post_all_pair)
-    # print(post_all_con)
     true_pairs['field'] = [field]*len(true_pairs)
-    true_pairs['prime_cat_ID'] = np.array(all_df.loc[ true_pairs['prime_index'], 'ID' ])
-    true_pairs['partner_cat_ID'] = np.array(all_df.loc[ true_pairs['partner_index'], 'ID' ])
-    
-    true_pairs['prime_control1_cat_ID'] = idx11_cid
-    true_pairs['prime_control2_cat_ID'] = idx12_cid
-    true_pairs['partner_control1_cat_ID'] = idx21_cid
-    true_pairs['partner_control2_cat_ID'] = idx22_cid
 
     
     return true_pairs, zspec_count
@@ -773,13 +759,3 @@ def get_control(control_ID, control_mass, control_z, gal_ID, mass, redshift, N_c
 
 if __name__ == '__main__':
     main()
-
-    
-    
-# NOTES
-# need Dale to clarify a few things:
-#   the data from zcat are for the mFDa4 catalog, but the HB4 is best from what I understand, so this is no good
-#   will need to choose which PDF's to do the analysis for
-#   right now, zlo and zhi are the 68.3% confidence intervals for the mFDa4 method...
-#   now what are these photflags?
-#   what are the q_specz flags?
