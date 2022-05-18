@@ -32,7 +32,7 @@ R_kpc = cosmo.arcsec_per_kpc_proper(0.5) # arcsec/kpc at z=0.5
 max_R_kpc = (150*u.kpc * R_kpc) # in arcseconds ### this is the bug right here
 
 mass_lo = 8.5 # lower mass limit of the more massive galaxy in a pair that we want to consider
-n = 500 # number of draws
+n = 10 # number of draws
 gamma = 1.4 # for k correction calculation
 
 max_sep = 100 # kpc
@@ -87,12 +87,11 @@ def main():
         combined_df = pd.concat([GDS_dict[it], EGS_dict[it], COS_dict[it], GDN_dict[it], UDS_dict[it]])
 
         if z_type == 'p':
-            combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photoz_results/kpc'+str(max_sep)+'/'+str(it)+'.csv')
+            combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photoz_results/kpc'+str(max_sep)+'/'+str(it)+'.csv', index=False)
         if z_type == 'ps':
-            #combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/kpc'+str(max_sep)+'/'+str(it)+'.csv')
-            combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/kpc'+str(max_sep)+'/'+str(it)+'.csv')
+            combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/photo-specz_results/kpc'+str(max_sep)+'/'+str(it)+'.csv', index=False)
         if z_type == 's':
-            combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/specz_results/kpc'+str(max_sep)+'/'+str(it)+'.csv')
+            combined_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/specz_results/kpc'+str(max_sep)+'/'+str(it)+'.csv', index=False)
 
     print('files written!')
         
@@ -257,22 +256,25 @@ def draw_z(df, field): # <20 min for one field
             F03p6 = 280.9 #±4.1 Jy
             F04p5 = 179.7 #±2.6 Jy
             F05p8 = 115.0 #±1.7 Jy
-            F08p0 = 64.9 #±0.9              # convert from mJy to Jy
-            mv3p6 = 2.5*np.log10(F03p6 / (f3p6/1000))
-            mv4p5 = 2.5*np.log10(F04p5 / (f4p5/1000))
-            mv5p8 = 2.5*np.log10(F05p8 / (f5p8/1000))
-            mv8p0 = 2.5*np.log10(F08p0 / (f8p0/1000))
+            F08p0 = 64.9 #±0.9 Jy         # convert from uJy to Jy
+            mv3p6 = 2.5*np.log10(F03p6 / (f3p6/1e6))
+            mv4p5 = 2.5*np.log10(F04p5 / (f4p5/1e6))
+            mv5p8 = 2.5*np.log10(F05p8 / (f5p8/1e6))
+            mv8p0 = 2.5*np.log10(F08p0 / (f8p0/1e6))
+            
             if ((x >= 0.08) and (y >= 0.15) and (y >= (1.21*x)-0.27) and (y <= (1.21*x)+0.27) and 
                 (f4p5 > f3p6) and (f5p8 > f4p5) and (f8p0 > f5p8)):
                 IR_AGN_DON = [1]*n
             else:
                 IR_AGN_DON = [0]*n
             if ((mv5p8 - mv8p0 > 0.6) and (mv3p6 - mv4p5 > 0.2 * (mv5p8 - mv8p0) + 0.18) and 
-                (mv3p6 - mv4p5 > 2.5 * (mv5p8 - mv8p0) + 3.5)):
+                (mv3p6 - mv4p5 > 2.5 * (mv5p8 - mv8p0) - 3.5)):
+                # print(mv3p6, mv4p5, mv5p8, mv8p0)
+                # print(mv3p6-mv4p5, mv5p8-mv8p0)
+                # sys.exit()
                 IR_AGN_STR = [1]*n
             else:
-                IR_AGN_STR = [0]*n
-            
+                IR_AGN_STR = [0]*n            
         
         # add entry into dictionary
         draw_z['gal_'+str(ID_str)+'_z'] = draw1
