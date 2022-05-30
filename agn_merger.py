@@ -32,13 +32,13 @@ R_kpc = cosmo.arcsec_per_kpc_proper(0.5) # arcsec/kpc at z=0.5
 max_R_kpc = (150*u.kpc * R_kpc) # in arcseconds ### this is the bug right here
 
 mass_lo = 8.5 # lower mass limit of the more massive galaxy in a pair that we want to consider
-n = 10 # number of draws
+n = 500 # number of draws
 gamma = 1.4 # for k correction calculation
 
-max_sep = 100 # kpc
+max_sep = 150 # kpc
 max_iso = 5000 # dv
 
-z_type = 'ps'
+z_type = 's'
 
 
 # -------------------------------------------------------------------------------------------------------------------------- #
@@ -132,10 +132,9 @@ def process_samples(field):
     #df = df.drop(df[ (df['zlo'] > 3.5) | (df['zhi'] < 0.25) ].index)
     # make additional quality cuts -> make cut on mass log(M) = 1 below limit to get pairs below mass limit
     if z_type != 'p':
-        if field != 'COS':
-            zspec = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/zspec_cats/'+field+'/ALL_CANDELS_zcat_'+field+'_zspec_wAIRD.csv')
-            zspec.loc[zspec['ZSPEC_AIRD'] == zspec['ZBEST_AIRD'], 'G_ZSPEC'] = zspec['ZSPEC_AIRD'] # assuming this worked..
-            df['ZSPEC'] = zspec['G_ZSPEC']
+        zspec = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/zspec_cats/'+field+'/ALL_CANDELS_zcat_'+field+'_zspec_wAIRD.csv')
+        zspec.loc[zspec['ZSPEC_AIRD'] == zspec['ZBEST_AIRD'], 'G_ZSPEC'] = zspec['ZSPEC_AIRD'] # assuming this worked..
+        df['ZSPEC'] = zspec['G_ZSPEC']
         df = df[ (df['CLASS_STAR'] < 0.9) & (df['PHOTFLAG'] == 0) & (df['MASS'] > (mass_lo-1)) ] ### & (df['ZSPEC'] > 0) ###
     else:                                                                                        ### think about this later
         df = df[ (df['CLASS_STAR'] < 0.9) & (df['PHOTFLAG'] == 0) & (df['MASS'] > (mass_lo-1)) ]
@@ -270,11 +269,11 @@ def draw_z(df, field): # <20 min for one field
             if ((mv5p8 - mv8p0 > 0.6) and (mv3p6 - mv4p5 > 0.2 * (mv5p8 - mv8p0) + 0.18) and 
                 (mv3p6 - mv4p5 > 2.5 * (mv5p8 - mv8p0) - 3.5)):
                 # print(mv3p6, mv4p5, mv5p8, mv8p0)
-                # print(mv3p6-mv4p5, mv5p8-mv8p0)
+                # print(mv3p6-mv4p5, mv5p8-mv8p0)     ISSUE HERE
                 # sys.exit()
                 IR_AGN_STR = [1]*n
             else:
-                IR_AGN_STR = [0]*n            
+                IR_AGN_STR = [0]*n           
         
         # add entry into dictionary
         draw_z['gal_'+str(ID_str)+'_z'] = draw1
@@ -297,6 +296,7 @@ def draw_z(df, field): # <20 min for one field
     # draw_df_M.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/test_output/drawn_M.csv', index=False)
     # draw_df_LX.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/test_output/drawn_LX.csv', index=False)
     # print('WRITTEN')
+    
     
     return draw_df_z, draw_df_M, draw_df_LX, draw_df_IR_AGN_DON, draw_df_IR_AGN_STR
 
@@ -337,11 +337,10 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
         all_df['IR_AGN_STR'] = IR_AGN_STR_drawn
         # if there is a spec q on quality > 1, change drawn_z to spec_z
         ### WILL NEED TO THINK CAREFULLY ON HOW THIS EFFECTS DRAWN M AND LX ###
-        if field != 'COS':
-            all_df.loc[ (all_df['ZSPEC'] > 0), 'drawn_z'] = all_df['ZSPEC']   
-            all_df.loc[ (all_df['ZSPEC'] > 0), 'drawn_LX'] = ( all_df['FX'] * 4 * np.pi *
-                                                                ((cosmo.luminosity_distance(all_df['drawn_z']).to(u.cm))**2) * 
-                                                                ((1+all_df['drawn_z'])**(gamma-2)) )
+        all_df.loc[ (all_df['ZSPEC'] > 0), 'drawn_z'] = all_df['ZSPEC']   
+        all_df.loc[ (all_df['ZSPEC'] > 0), 'drawn_LX'] = ( all_df['FX'] * 4 * np.pi *
+                                                            ((cosmo.luminosity_distance(all_df['drawn_z']).to(u.cm))**2) * 
+                                                            ((1+all_df['drawn_z'])**(gamma-2)) )
         
     elif z_type == 's':
         # if we are choosing just photo-z's, stick with the draws
@@ -357,12 +356,11 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
         all_df['IR_AGN_DON'] = IR_AGN_DON_drawn
         all_df['IR_AGN_STR'] = IR_AGN_STR_drawn
         # make drawn_z the spec z and throw out the rest
-        if field != 'COS':
-            all_df.loc[ (all_df['ZSPEC'] > 0), 'drawn_z'] = all_df['ZSPEC']
-            all_df.loc[ (all_df['ZSPEC'] > 0), 'drawn_LX'] = ( all_df['FX'] * 4 * np.pi *
-                                                                ((cosmo.luminosity_distance(all_df['drawn_z']).to(u.cm))**2) * 
-                                                                ((1+all_df['drawn_z'])**(gamma-2)) )
-            
+        all_df.loc[ (all_df['ZSPEC'] > 0), 'drawn_z'] = all_df['ZSPEC']
+        all_df.loc[ (all_df['ZSPEC'] > 0), 'drawn_LX'] = ( all_df['FX'] * 4 * np.pi *
+                                                            ((cosmo.luminosity_distance(all_df['drawn_z']).to(u.cm))**2) * 
+                                                            ((1+all_df['drawn_z'])**(gamma-2)) )
+
         all_df = all_df[ (all_df['ZSPEC'] >= 0) ] # will have to exculde COSMOS results
     
         
@@ -475,7 +473,7 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
 
     # add galaxies that aren't pairs into the isolated sample:
     #iso_add = (pair_df[ (pair_df['kpc_sep'] > 100*u.kpc) | (abs(pair_df['dv']) > 10000) ])
-    iso_add = (pair_df[ (abs(pair_df['dv']) > 5000) | (pair_df['kpc_sep'] > 150) ])
+    iso_add = (pair_df[ (abs(pair_df['dv']) > max_iso) | (pair_df['kpc_sep'] > max_sep) ])
 
     # just stack prime and partner indices into massive array:
     iso_add_idx = np.concatenate( (np.array(iso_add['prime_index']), np.array(iso_add['partner_index'])), axis=0)
@@ -503,24 +501,34 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     iso_mass = all_df.loc[all_iso, 'drawn_M']
     iso_z = all_df.loc[all_iso, 'drawn_z']
     iso_idx = all_iso
-    
-    # print('HEREEEE')
-    # print(iso_conf)
-    # print(iso_unq)
-    # print(all_iso)
-    # pair_idx = np.concatenate( (np.array(true_pairs['prime_index']), np.array(true_pairs['partner_index'])), axis=0)
-    # iso_idx = all_iso
-    # for idx in pair_idx:
-    #     if idx in iso_idx:
-    #         print('TRUEE DAT')
-    # print('END')
-        
-    # print('NUMBER OF PAIRS: ', len(pair_mass), len(pair_z))
-    # print('NUMBER OF ISOS: ', len(iso_mass), len(iso_z))
-    # true_pairs.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/test_output/test_true_pair_df.csv')
 
+
+    # shuffle pair info to get rid of prime mass bias
+    data_length = pair_idx.shape[0]
+    # Here we create an array of shuffled indices
+    shuf_order = np.arange(data_length)
+    np.random.shuffle(shuf_order)
+
+    shuf_idx = pair_idx[shuf_order] # Shuffle the original data
+    shuf_mass = pair_mass[shuf_order]
+    shuf_z = pair_z[shuf_order]
     
-    controls, c_flag = get_control(iso_idx, iso_mass, iso_z, pair_idx, pair_mass, pair_z)
+    # run controls function
+    shuf_controls, shuf_c_flag = get_control(iso_idx, iso_mass, iso_z, shuf_idx, shuf_mass, shuf_z)
+
+    # Create an inverse of the shuffled index array (to reverse the shuffling operation, or to "unshuffle")
+    unshuf_order = np.zeros_like(shuf_order)
+    unshuf_order[shuf_order] = np.arange(data_length)
+
+    unshuf_controls = shuf_controls[unshuf_order] # Unshuffle the shuffled data
+    unshuf_cflag = shuf_c_flag[unshuf_order]
+    
+    controls = unshuf_controls # just so the names remain the same
+    c_flag = unshuf_cflag
+    
+    # let's modify control selection to see if selection improves
+    
+    
     # # let's output the matched fraction based on c_flag
     # c_flag_all = np.concatenate(c_flag)
     # tp = len(c_flag_all)
@@ -678,8 +686,9 @@ def get_control(control_ID, control_mass, control_z, gal_ID, mass, redshift, N_c
         mmax = m+np.log10(mfactor)
 
         # create a dataframe for possible matches
-        cmatch_df = all_iso_df[ (all_iso_df['z'] >= zmin) & (all_iso_df['z'] <= zmax) & (all_iso_df['mass'] >= mmin) &
-                               (all_iso_df['mass'] <= mmax) ]
+        # cmatch_df = all_iso_df[ (all_iso_df['z'] >= zmin) & (all_iso_df['z'] <= zmax) & (all_iso_df['mass'] >= mmin) &
+        #                        (all_iso_df['mass'] <= mmax) ]
+        cmatch_df = all_iso_df
         
         # create columns for difference between z/mass control and pair z/m
         cmatch_df['dif'] = (cmatch_df['z'] - z)**2 + (cmatch_df['mass'] - m) **2
