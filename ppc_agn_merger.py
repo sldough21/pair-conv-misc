@@ -7,6 +7,7 @@ import pandas as pd
 pd.options.mode.chained_assignment = None  # default='warn' -> could change to None
 
 import numpy as np
+np.seterr(divide = 'ignore') #'warn' <- division issues in log10, no problem these nans are replaced later
 from time import sleep
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -37,8 +38,9 @@ gamma = 1.4 # for k correction calculation
 
 max_sep = 150 # kpc
 
-sigma_cut = 0.3 # for individual PDF broadness
-zp_cut = 0.01 # for pairs that will negligently contribute to the final AGN fractions
+sigma_cut = 1 # for individual PDF broadness
+zp_cut = 0 # for pairs that will negligently contribute to the final AGN fractions
+hmag_cut = 100 # essentially no cut
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
 
@@ -47,7 +49,7 @@ def main():
     print('beginning main()')
     
     # we want to parallelize the data by fields, so:
-    all_fields = ['GDS','EGS','COS','GDN','UDS','COSMOS'] # COS is for CANDELS COSMOS
+    all_fields = ['GDS','EGS','COS','GDN','UDS']#,'COSMOS'] # COS is for CANDELS COSMOS
     #all_fields = ['COSMOS']
     
     # Create a multiprocessing Pool
@@ -58,7 +60,7 @@ def main():
     # print(combined_data)
         
     #combined_data.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/pair_prob/weighted_pair_data.csv', index=False)
-    combined_data.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/pair_prob/pair_data_s'+str(sigma_cut)+'.csv', index=False)
+    combined_data.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/pair_prob/no_hmag_cut_sig1.csv', index=False)
     
     print('Done! ', sigma_cut)
     
@@ -100,7 +102,8 @@ def process_samples(field):
         df_phot = df_phot.reset_index(drop=True)
         df['ZPHOT_PEAK'] = df_phot['mFDa4_z_peak'] # might want to use weight for consistency with COSMOS
         df['SIG_DIFF'] = df_phot['mFDa4_z683_high'] - df_phot['mFDa4_z683_low']
-        df = df[ (df['CLASS_STAR'] < 0.9) & (df['PHOTFLAG'] == 0) & (df['MASS'] > (mass_lo-1)) & (df['SIG_DIFF'] < sigma_cut) ]
+        df = df[ (df['CLASS_STAR'] < 0.9) & (df['PHOTFLAG'] == 0) & (df['MASS'] > (mass_lo-1)) & (df['SIG_DIFF'] < sigma_cut) &
+               (df['HMAG'] < hmag_cut) ]
         df = df.reset_index(drop=True)
 
         
@@ -117,11 +120,72 @@ def determine_pairs(df, field):
     # get preliminary list of pairs and isolated galaxies
     # make definite redshift cut:
     all_df = df[ (df['ZPHOT_PEAK'] >= 0.5) & (df['ZPHOT_PEAK'] <= 3.0) ]
+    print(field, len(all_df))
     all_df = all_df.reset_index(drop=True)
     
     # calculate LX
     all_df['LX'] = ( all_df['FX'] * 4 * np.pi * ((cosmo.luminosity_distance(all_df['ZPHOT_PEAK']).to(u.cm))**2) * 
                                                                 ((1+all_df['ZPHOT_PEAK'])**(gamma-2)) )
+    # flag IR AGN
+    all_df['IR_AGN_DON'] = [0]*len(all_df)
+    all_df['IR_AGN_STR'] = [0]*len(all_df)
+    if field == 'GDN':
+        all_df = all_df.rename(columns={'IRAC_CH1_SCANDELS_FLUX':'IRAC_CH1_FLUX', 'IRAC_CH2_SCANDELS_FLUX':'IRAC_CH2_FLUX'})
+        
+    all_df.loc[ (np.log10(all_df['IRAC_CH3_FLUX']/all_df['IRAC_CH1_FLUX']) >= 0.08) &
+               (np.log10(all_df['IRAC_CH4_FLUX']/all_df['IRAC_CH2_FLUX']) >= 0.15) &
+               (np.log10(all_df['IRAC_CH4_FLUX']/all_df['IRAC_CH2_FLUX']) >= (1.21*np.log10(all_df['IRAC_CH3_FLUX']/all_df['IRAC_CH1_FLUX']))-0.27) &
+               (np.log10(all_df['IRAC_CH4_FLUX']/all_df['IRAC_CH2_FLUX']) <= (1.21*np.log10(all_df['IRAC_CH3_FLUX']/all_df['IRAC_CH1_FLUX']))+0.27) &
+               (all_df['IRAC_CH2_FLUX'] > all_df['IRAC_CH1_FLUX']) &
+               (all_df['IRAC_CH3_FLUX'] > all_df['IRAC_CH2_FLUX']) &
+               (all_df['IRAC_CH4_FLUX'] > all_df['IRAC_CH3_FLUX']), 'IR_AGN_DON'] = 1
+    
+    # zero magnitude fluxes:
+    F03p6 = 280.9 #±4.1 Jy
+    F04p5 = 179.7 #±2.6 Jy
+    F05p8 = 115.0 #±1.7 Jy
+    F08p0 = 64.9 #±0.9 Jy 
+    all_df.loc[ (2.5*np.log10(F05p8 / (all_df['IRAC_CH3_FLUX']/1e6)) - 2.5*np.log10(F08p0 / (all_df['IRAC_CH4_FLUX']/1e6)) > 0.6) &
+               (2.5*np.log10(F03p6 / (all_df['IRAC_CH1_FLUX']/1e6)) - 2.5*np.log10(F04p5 / (all_df['IRAC_CH2_FLUX']/1e6)) > 
+               0.2 * (2.5*np.log10(F05p8 / (all_df['IRAC_CH3_FLUX']/1e6)) - 2.5*np.log10(F08p0 / (all_df['IRAC_CH4_FLUX']/1e6))) + 0.18) &
+               (2.5*np.log10(F03p6 / (all_df['IRAC_CH1_FLUX']/1e6)) - 2.5*np.log10(F04p5 / (all_df['IRAC_CH2_FLUX']/1e6)) > 
+                2.5 * (2.5*np.log10(F05p8 / (all_df['IRAC_CH3_FLUX']/1e6)) - 2.5*np.log10(F08p0 / (all_df['IRAC_CH4_FLUX']/1e6))) - 3.5),
+               'IR_AGN_STR'] = 1
+    
+    # set the ones with incomplete data back to 0: POTENTIALLY UNECESSARY NOW (BELOW)
+    all_df.loc[ (all_df['IRAC_CH1_FLUX'] <= 0) | (all_df['IRAC_CH2_FLUX'] <= 0) |
+               (all_df['IRAC_CH3_FLUX'] <= 0) | (all_df['IRAC_CH4_FLUX'] <= 0), ['IR_AGN_DON', 'IR_AGN_STR'] ] = 0
+    
+    # set the ones with flux detections in any band below the limiting magnitude flux density to 0 as well
+    if field == 'GDS': # [0.08953648 0.11481536 1.14815362 1.18032064]
+        all_df.loc[ (all_df['IRAC_CH1_FLUX'] < 0.08953648) | (all_df['IRAC_CH2_FLUX'] < 0.11481536) |
+               (all_df['IRAC_CH3_FLUX'] < 1.14815362) | (all_df['IRAC_CH4_FLUX'] < 1.18032064), ['IR_AGN_DON', 'IR_AGN_STR'] ] = 0
+    elif field == 'EGS': # [1.         0.75857758 3.63078055 2.7542287 ]
+        all_df.loc[ (all_df['IRAC_CH1_FLUX'] < 1) | (all_df['IRAC_CH2_FLUX'] < 0.75857758) |
+               (all_df['IRAC_CH3_FLUX'] < 3.63078055) | (all_df['IRAC_CH4_FLUX'] < 2.7542287), ['IR_AGN_DON', 'IR_AGN_STR'] ] = 0
+    elif field == 'COS': # [0.62517269  0.63095734 11.16863248 12.02264435]
+        all_df.loc[ (all_df['IRAC_CH1_FLUX'] < 0.62517269) | (all_df['IRAC_CH2_FLUX'] < 0.63095734) |
+               (all_df['IRAC_CH3_FLUX'] < 11.16863248) | (all_df['IRAC_CH4_FLUX'] < 12.02264435), ['IR_AGN_DON', 'IR_AGN_STR'] ] = 0
+    elif field == 'GDN': # [0.57543994 0.52480746 2.7542287  3.01995172]
+        all_df.loc[ (all_df['IRAC_CH1_FLUX'] < 0.57543994) | (all_df['IRAC_CH2_FLUX'] < 0.52480746) |
+               (all_df['IRAC_CH3_FLUX'] < 2.7542287) | (all_df['IRAC_CH4_FLUX'] < 3.01995172), ['IR_AGN_DON', 'IR_AGN_STR'] ] = 0
+    elif field == 'UDS': # [0.46989411 0.519996   4.36515832 4.5289758 ]
+        all_df.loc[ (all_df['IRAC_CH1_FLUX'] < 0.46989411) | (all_df['IRAC_CH2_FLUX'] < 0.519996) |
+               (all_df['IRAC_CH3_FLUX'] < 4.36515832) | (all_df['IRAC_CH4_FLUX'] < 4.5289758), ['IR_AGN_DON', 'IR_AGN_STR'] ] = 0
+    else:
+        print('FILLER FOR COSMOS LIMITING MAGS')
+    
+    
+    ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
+    if field == 'GDS':
+        all_df['DALE_AGN_FLAG'] = all_df['AGN_FLAG']
+    elif field == 'COSMOS':
+        all_df['DALE_AGN_FLAG'] = [0]*len(all_df)
+    elif field == 'GDN':
+        all_df['DALE_AGN_FLAG'] = all_df['X_RAY_FLAG']
+    else:
+        all_df['DALE_AGN_FLAG'] = all_df['AGNFLAG']
+    ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
     
     # match catalogs:
     df_pos = SkyCoord(all_df['RA'],all_df['DEC'],unit='deg')
@@ -190,11 +254,11 @@ def determine_pairs(df, field):
     print('{0}: pair_count = {1}, iso count = {2}'.format(field, len(true_pairs), len(all_iso)))
     
     # add back control galaxies that are only included in pairs where pair_prob < 0
-    gtrue_pairs = true_pairs[ true_pairs['pair_prob'] >= 0.01 ] ### MAY NEED TO RESET INDEX ###
+    gtrue_pairs = true_pairs[ true_pairs['pair_prob'] >= zp_cut ] ### MAY NEED TO RESET INDEX ###
     gtrue_pairs = gtrue_pairs.reset_index(drop=True)
     
     # add galaxies that aren't pairs into the isolated sample:
-    iso_add = true_pairs[ true_pairs['pair_prob'] < 0.01 ]
+    iso_add = true_pairs[ true_pairs['pair_prob'] < zp_cut ]
     # just stack prime and partner indices into massive array:
     iso_add_idx = np.concatenate( (np.array(iso_add['prime_index']), np.array(iso_add['partner_index'])), axis=0)
     # return unique indices
@@ -229,7 +293,12 @@ def determine_pairs(df, field):
     gtrue_pairs['partner_LX'] = np.array(all_df.loc[ gtrue_pairs['partner_index'], 'LX' ])
     gtrue_pairs['prime_PDFsig'] = np.array(all_df.loc[ gtrue_pairs['prime_index'], 'SIG_DIFF'])
     gtrue_pairs['partner_PDFsig'] = np.array(all_df.loc[ gtrue_pairs['partner_index'], 'SIG_DIFF'])
+    gtrue_pairs['prime_IR_AGN_DON'] = np.array(all_df.loc[gtrue_pairs['prime_index'], 'IR_AGN_DON'])
+    gtrue_pairs['prime_IR_AGN_STR'] = np.array(all_df.loc[gtrue_pairs['prime_index'], 'IR_AGN_STR'])
+    gtrue_pairs['partner_IR_AGN_DON'] = np.array(all_df.loc[gtrue_pairs['partner_index'], 'IR_AGN_DON'])
+    gtrue_pairs['partner_IR_AGN_STR'] = np.array(all_df.loc[gtrue_pairs['partner_index'], 'IR_AGN_STR'])
     gtrue_pairs['field'] = [field] * len(gtrue_pairs)
+    
 
     controls, c_flag = get_control(iso_idx, iso_mass, iso_z, iso_sig, pair_idx, pair_mass, pair_z, pair_sig)
     # let's output the matched fraction based on c_flag
@@ -273,6 +342,10 @@ def determine_pairs(df, field):
     gtrue_pairs.loc[ gtrue_pairs['i1prime_idx'] != -99, 'c1prime_sig' ] = np.array(all_df.loc[ c1prime_no99, 'SIG_DIFF' ])
     gtrue_pairs['c1prime_LX'] = [-99]*len(gtrue_pairs)
     gtrue_pairs.loc[ gtrue_pairs['i1prime_idx'] != -99, 'c1prime_LX' ] = np.array(all_df.loc[ c1prime_no99, 'LX' ])
+    gtrue_pairs['c1prime_IR_AGN_DON'] = [-99]*len(gtrue_pairs)
+    gtrue_pairs.loc[ gtrue_pairs['i1prime_idx'] != -99, 'c1prime_IR_AGN_DON' ] = np.array(all_df.loc[ c1prime_no99, 'IR_AGN_DON' ]) 
+    gtrue_pairs['c1prime_IR_AGN_STR'] = [-99]*len(gtrue_pairs)
+    gtrue_pairs.loc[ gtrue_pairs['i1prime_idx'] != -99, 'c1prime_IR_AGN_STR' ] = np.array(all_df.loc[ c1prime_no99, 'IR_AGN_STR' ]) 
     
     gtrue_pairs['c2prime_ID'] = [-99]*len(gtrue_pairs)
     gtrue_pairs.loc[ gtrue_pairs['i2prime_idx'] != -99, 'c2prime_ID' ] = np.array(all_df.loc[ c2prime_no99, 'ID' ])
@@ -284,6 +357,10 @@ def determine_pairs(df, field):
     gtrue_pairs.loc[ gtrue_pairs['i2prime_idx'] != -99, 'c2prime_sig' ] = np.array(all_df.loc[ c2prime_no99, 'SIG_DIFF' ])
     gtrue_pairs['c2prime_LX'] = [-99]*len(gtrue_pairs)
     gtrue_pairs.loc[ gtrue_pairs['i2prime_idx'] != -99, 'c2prime_LX' ] = np.array(all_df.loc[ c2prime_no99, 'LX' ])
+    gtrue_pairs['c2prime_IR_AGN_DON'] = [-99]*len(gtrue_pairs)
+    gtrue_pairs.loc[ gtrue_pairs['i2prime_idx'] != -99, 'c2prime_IR_AGN_DON' ] = np.array(all_df.loc[ c2prime_no99, 'IR_AGN_DON' ]) 
+    gtrue_pairs['c2prime_IR_AGN_STR'] = [-99]*len(gtrue_pairs)
+    gtrue_pairs.loc[ gtrue_pairs['i2prime_idx'] != -99, 'c2prime_IR_AGN_STR' ] = np.array(all_df.loc[ c2prime_no99, 'IR_AGN_STR' ]) 
     
     gtrue_pairs['c1partner_ID'] = [-99]*len(gtrue_pairs)
     gtrue_pairs.loc[ gtrue_pairs['i1partner_idx'] != -99, 'c1partner_ID' ] = np.array(all_df.loc[ c1partner_no99, 'ID' ])
@@ -295,6 +372,10 @@ def determine_pairs(df, field):
     gtrue_pairs.loc[ gtrue_pairs['i1partner_idx'] != -99, 'c1partner_sig' ] = np.array(all_df.loc[ c1partner_no99, 'SIG_DIFF' ])
     gtrue_pairs['c1partner_LX'] = [-99]*len(gtrue_pairs)
     gtrue_pairs.loc[ gtrue_pairs['i1partner_idx'] != -99, 'c1partner_LX' ] = np.array(all_df.loc[ c1partner_no99, 'LX' ])
+    gtrue_pairs['c1partner_IR_AGN_DON'] = [-99]*len(gtrue_pairs)
+    gtrue_pairs.loc[ gtrue_pairs['i1partner_idx'] != -99, 'c1partner_IR_AGN_DON' ] = np.array(all_df.loc[ c1partner_no99, 'IR_AGN_DON' ]) 
+    gtrue_pairs['c1partner_IR_AGN_STR'] = [-99]*len(gtrue_pairs)
+    gtrue_pairs.loc[ gtrue_pairs['i1partner_idx'] != -99, 'c1partner_IR_AGN_STR' ] = np.array(all_df.loc[ c1partner_no99, 'IR_AGN_STR' ]) 
     
     gtrue_pairs['c2partner_ID'] = [-99]*len(gtrue_pairs)
     gtrue_pairs.loc[ gtrue_pairs['i2partner_idx'] != -99, 'c2partner_ID' ] = np.array(all_df.loc[ c2partner_no99, 'ID' ])
@@ -306,6 +387,10 @@ def determine_pairs(df, field):
     gtrue_pairs.loc[ gtrue_pairs['i2partner_idx'] != -99, 'c2partner_sig' ] = np.array(all_df.loc[ c2partner_no99, 'SIG_DIFF' ])
     gtrue_pairs['c2partner_LX'] = [-99]*len(gtrue_pairs)
     gtrue_pairs.loc[ gtrue_pairs['i2partner_idx'] != -99, 'c2partner_LX' ] = np.array(all_df.loc[ c2partner_no99, 'LX' ])
+    gtrue_pairs['c2partner_IR_AGN_DON'] = [-99]*len(gtrue_pairs)
+    gtrue_pairs.loc[ gtrue_pairs['i2partner_idx'] != -99, 'c2partner_IR_AGN_DON' ] = np.array(all_df.loc[ c2partner_no99, 'IR_AGN_DON' ]) 
+    gtrue_pairs['c2partner_IR_AGN_STR'] = [-99]*len(gtrue_pairs)
+    gtrue_pairs.loc[ gtrue_pairs['i2partner_idx'] != -99, 'c2partner_IR_AGN_STR' ] = np.array(all_df.loc[ c2partner_no99, 'IR_AGN_STR' ]) 
     
     # just tack on counts for total isolated galaxies:
     # gtrue_pairs['iso_count'] = [len(all_iso)] * len(gtrue_pairs)
@@ -314,6 +399,22 @@ def determine_pairs(df, field):
     gtrue_pairs['c2prime_flag'] = prime_flags[:,1]
     gtrue_pairs['c1partner_flag'] = partner_flags[:,0]
     gtrue_pairs['c2partner_flag'] = partner_flags[:,1]
+    
+    ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
+    
+    gtrue_pairs['prime_DALE_AGN_FLAG'] = np.array(all_df.loc[ gtrue_pairs['prime_index'], 'DALE_AGN_FLAG' ])
+    gtrue_pairs['partner_DALE_AGN_FLAG'] = np.array(all_df.loc[ gtrue_pairs['partner_index'], 'DALE_AGN_FLAG' ])
+    
+    gtrue_pairs['c1prime_DALE_AGN_FLAG'] = [-99]*len(gtrue_pairs)
+    gtrue_pairs.loc[ gtrue_pairs['i1prime_idx'] != -99, 'c1prime_DALE_AGN_FLAG' ] = np.array(all_df.loc[ c1prime_no99, 'DALE_AGN_FLAG' ])   
+    gtrue_pairs['c2prime_DALE_AGN_FLAG'] = [-99]*len(gtrue_pairs)
+    gtrue_pairs.loc[ gtrue_pairs['i2prime_idx'] != -99, 'c2prime_DALE_AGN_FLAG' ] = np.array(all_df.loc[ c2prime_no99, 'DALE_AGN_FLAG' ])  
+    gtrue_pairs['c1partner_DALE_AGN_FLAG'] = [-99]*len(gtrue_pairs)
+    gtrue_pairs.loc[ gtrue_pairs['i1partner_idx'] != -99, 'c1partner_DALE_AGN_FLAG' ] = np.array(all_df.loc[ c1partner_no99, 'DALE_AGN_FLAG' ])   
+    gtrue_pairs['c2partner_DALE_AGN_FLAG'] = [-99]*len(gtrue_pairs)
+    gtrue_pairs.loc[ gtrue_pairs['i2partner_idx'] != -99, 'c2partner_DALE_AGN_FLAG' ] = np.array(all_df.loc[ c2partner_no99, 'DALE_AGN_FLAG' ])  
+    
+    ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
     
     return gtrue_pairs
     
