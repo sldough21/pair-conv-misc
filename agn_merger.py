@@ -38,7 +38,7 @@ gamma = 1.4 # for k correction calculation
 max_sep = 150 # kpc
 max_iso = 5000 # dv
 
-z_type = 's'
+z_type = 'p'
 
 
 # -------------------------------------------------------------------------------------------------------------------------- #
@@ -62,7 +62,7 @@ def main():
     # close pool
     pool.close()
     pool.join()
-
+    
     print('Q_ZSPEC > 1 before')
     print('average number of spec-z used in each iteration by field:')
     print('GDS: {}'.format(all_data[0][1]))
@@ -127,14 +127,33 @@ def process_samples(field):
     
     # load in new catalogs w/Aird
     df = pd.read_csv(PATH+'CANDELS_Catalogs/CANDELS.'+field+'.1018.Lx_best.wFx_AIRD.csv')
+    
+    df_phot = pd.read_csv(PATH+'redshift_catalogs.full/zcat_'+field+'_v2.0.cat', names=['file','ID','RA','DEC','z_best',
+                    'z_best_type','z_spec','z_spec_ref','z_grism','mFDa4_z_peak','mFDa4_z_weight','mFDa4_z683_low',
+                    'mFDa4_z683_high','mFDa4_z954_low','mFDa4_z954_high','HB4_z_peak','HB4_z_weight','HB4_z683_low',
+                    'HB4_z683_high','HB4_z954_low','HB4_z954_high','Finkelstein_z_peak','Finkelstein_z_weight',
+                    'Finkelstein_z683_low','Finkelstein_z683_high','Finkelstein_z954_low','Finkelstein_z954_high',
+                    'Fontana_z_peak','Fontana_z_weight','Fontana_z683_low','Fontana_z683_high','Fontana_z954_low',
+                    'Fontana_z954_high','Pforr_z_peak','Pforr_z_weight','Pforr_z683_low','Pforr_z683_high',
+                    'Pforr_z954_low','Pforr_z954_high','Salvato_z_peak','Salvato_z_weight','Salvato_z683_low',
+                    'Salvato_z683_high','Salvato_z954_low','Salvato_z954_high','Wiklind_z_peak','Wiklind_z_weight',
+                    'Wiklind_z683_low','Wiklind_z683_high','Wiklind_z954_low','Wiklind_z954_high','Wuyts_z_peak',
+                    'Wuyts_z_weight','Wuyts_z683_low','Wuyts_z683_high','Wuyts_z954_low','Wuyts_z954_high'],
+                       delimiter=' ', comment='#')
+    # match based on ID as GDN has ID weirdness
+    df_phot = df_phot.loc[ (df_phot['ID'].isin(df['ID']) == True) ]
+    df_phot = df_phot.reset_index(drop=True)
+    df['ZPHOT_PEAK'] = df_phot['mFDa4_z_peak'] # might want to use weight for consistency with COSMOS
+    df['SIG_DIFF'] = df_phot['mFDa4_z683_high'] - df_phot['mFDa4_z683_low']
 
     # throw away galaxies with PDF confidence intervals beyond redshift range
     #df = df.drop(df[ (df['zlo'] > 3.5) | (df['zhi'] < 0.25) ].index)
     # make additional quality cuts -> make cut on mass log(M) = 1 below limit to get pairs below mass limit
     if z_type != 'p':
-        zspec = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/zspec_cats/'+field+'/ALL_CANDELS_zcat_'+field+'_zspec_wAIRD.csv')
+        zspec = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/zspec_cats/'+field+'/ALL_CANDELS_'+field+'_ZSPEC_CAT_wAIRD.csv')
         zspec.loc[zspec['ZSPEC_AIRD'] == zspec['ZBEST_AIRD'], 'G_ZSPEC'] = zspec['ZSPEC_AIRD'] # assuming this worked..
         df['ZSPEC'] = zspec['G_ZSPEC']
+        df.loc[ df['ZSPEC'] > 0, 'SIG_DIFF'] = 0
         df = df[ (df['CLASS_STAR'] < 0.9) & (df['PHOTFLAG'] == 0) & (df['MASS'] > (mass_lo-1)) ] ### & (df['ZSPEC'] > 0) ###
     else:                                                                                        ### think about this later
         df = df[ (df['CLASS_STAR'] < 0.9) & (df['PHOTFLAG'] == 0) & (df['MASS'] > (mass_lo-1)) ]
@@ -247,6 +266,26 @@ def draw_z(df, field): # <20 min for one field
             f8p0 = df.loc[i, 'IRAC_CH4_FLUX']
             
         if f3p6 <= 0 or f4p5 <= 0 or f5p8 <= 0 or f8p0 <= 0:
+            IR_AGN_DON = [0]*n
+            IR_AGN_STR = [0]*n
+        elif field == 'GDS' and (f3p6 < 0.08953648 or f4p5 < 0.11481536 or 
+                                 f5p8 < 1.14815362 or f8p0 < 1.18032064): # [0.08953648 0.11481536 1.14815362 1.18032064]
+            IR_AGN_DON = [0]*n
+            IR_AGN_STR = [0]*n
+        elif field == 'EGS' and (f3p6 < 1 or f4p5 < 0.75857758 or 
+                                 f5p8 < 3.63078055 or f8p0 < 2.7542287): # [1.         0.75857758 3.63078055 2.7542287 ]
+            IR_AGN_DON = [0]*n
+            IR_AGN_STR = [0]*n
+        elif field == 'COS' and (f3p6 < 0.62517269 or f4p5 < 0.63095734 or 
+                                 f5p8 < 11.16863248 or f8p0 < 12.02264435): # [ 0.62517269  0.63095734 11.16863248 12.02264435]
+            IR_AGN_DON = [0]*n
+            IR_AGN_STR = [0]*n
+        elif field == 'GDN' and (f3p6 < 0.57543994 or f4p5 < 0.52480746 or 
+                                 f5p8 < 2.7542287 or f8p0 < 3.01995172): # [0.57543994 0.52480746 2.7542287  3.01995172]
+            IR_AGN_DON = [0]*n
+            IR_AGN_STR = [0]*n
+        elif field == 'UDS' and (f3p6 < 0.46989411 or f4p5 < 0.519996 or 
+                                 f5p8 < 4.36515832 or f8p0 < 4.5289758): # [0.46989411 0.519996   4.36515832 4.5289758 ]
             IR_AGN_DON = [0]*n
             IR_AGN_STR = [0]*n
         else:
@@ -502,7 +541,6 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     iso_z = all_df.loc[all_iso, 'drawn_z']
     iso_idx = all_iso
 
-
     # shuffle pair info to get rid of prime mass bias
     data_length = pair_idx.shape[0]
     # Here we create an array of shuffled indices
@@ -565,6 +603,7 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     true_pairs['prime_cat_ID'] = np.array(all_df.loc[ true_pairs['prime_index'], 'ID' ])
     true_pairs['prime_drawn_z'] = np.array(all_df.loc[true_pairs['prime_index'], 'drawn_z'])
     true_pairs['prime_drawn_M'] = np.array(all_df.loc[true_pairs['prime_index'], 'drawn_M'])
+    true_pairs['prime_2sigma'] = np.array(all_df.loc[true_pairs['prime_index'], 'SIG_DIFF'])
     true_pairs['prime_drawn_LX'] = np.array(all_df.loc[true_pairs['prime_index'], 'drawn_LX'])
     true_pairs['prime_IR_AGN_DON'] = np.array(all_df.loc[true_pairs['prime_index'], 'IR_AGN_DON'])
     true_pairs['prime_IR_AGN_STR'] = np.array(all_df.loc[true_pairs['prime_index'], 'IR_AGN_STR'])
@@ -572,6 +611,7 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     true_pairs['partner_cat_ID'] = np.array(all_df.loc[ true_pairs['partner_index'], 'ID' ])
     true_pairs['partner_drawn_z'] = np.array(all_df.loc[true_pairs['partner_index'], 'drawn_z'])
     true_pairs['partner_drawn_M'] = np.array(all_df.loc[true_pairs['partner_index'], 'drawn_M'])
+    true_pairs['partner_2sigma'] = np.array(all_df.loc[true_pairs['partner_index'], 'SIG_DIFF'])
     true_pairs['partner_drawn_LX'] = np.array(all_df.loc[true_pairs['partner_index'], 'drawn_LX'])
     true_pairs['partner_IR_AGN_DON'] = np.array(all_df.loc[true_pairs['partner_index'], 'IR_AGN_DON'])
     true_pairs['partner_IR_AGN_STR'] = np.array(all_df.loc[true_pairs['partner_index'], 'IR_AGN_STR'])
@@ -588,6 +628,8 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     true_pairs.loc[ true_pairs['prime_control1_idx'] != -99, 'prime_control1_drawn_z' ] = np.array(all_df.loc[ c1prime_no99, 'drawn_z' ]) 
     true_pairs['prime_control1_drawn_M'] = [-99]*len(true_pairs)
     true_pairs.loc[ true_pairs['prime_control1_idx'] != -99, 'prime_control1_drawn_M' ] = np.array(all_df.loc[ c1prime_no99, 'drawn_M' ])  
+    true_pairs['prime_control1_2sigma'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['prime_control1_idx'] != -99, 'prime_control1_2sigma' ] = np.array(all_df.loc[ c1prime_no99, 'SIG_DIFF' ])
     true_pairs['prime_control1_drawn_LX'] = [-99]*len(true_pairs)
     true_pairs.loc[ true_pairs['prime_control1_idx'] != -99, 'prime_control1_drawn_LX' ] = np.array(all_df.loc[ c1prime_no99, 'drawn_LX' ])  
     true_pairs['prime_control1_IR_AGN_DON'] = [-99]*len(true_pairs)
@@ -602,6 +644,8 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     true_pairs.loc[ true_pairs['prime_control2_idx'] != -99, 'prime_control2_drawn_z' ] = np.array(all_df.loc[ c2prime_no99, 'drawn_z' ]) 
     true_pairs['prime_control2_drawn_M'] = [-99]*len(true_pairs)
     true_pairs.loc[ true_pairs['prime_control2_idx'] != -99, 'prime_control2_drawn_M' ] = np.array(all_df.loc[ c2prime_no99, 'drawn_M' ])  
+    true_pairs['prime_control2_2sigma'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['prime_control2_idx'] != -99, 'prime_control2_2sigma' ] = np.array(all_df.loc[ c2prime_no99, 'SIG_DIFF' ])
     true_pairs['prime_control2_drawn_LX'] = [-99]*len(true_pairs)
     true_pairs.loc[ true_pairs['prime_control2_idx'] != -99, 'prime_control2_drawn_LX' ] = np.array(all_df.loc[ c2prime_no99, 'drawn_LX' ])  
     true_pairs['prime_control2_IR_AGN_DON'] = [-99]*len(true_pairs)
@@ -616,6 +660,8 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     true_pairs.loc[ true_pairs['partner_control1_idx'] != -99, 'partner_control1_drawn_z' ] = np.array(all_df.loc[ c1partner_no99, 'drawn_z' ]) 
     true_pairs['partner_control1_drawn_M'] = [-99]*len(true_pairs)
     true_pairs.loc[ true_pairs['partner_control1_idx'] != -99, 'partner_control1_drawn_M' ] = np.array(all_df.loc[ c1partner_no99, 'drawn_M' ])  
+    true_pairs['partner_control1_2sigma'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['partner_control1_idx'] != -99, 'partner_control1_2sigma' ] = np.array(all_df.loc[ c1partner_no99, 'SIG_DIFF' ])
     true_pairs['partner_control1_drawn_LX'] = [-99]*len(true_pairs)
     true_pairs.loc[ true_pairs['partner_control1_idx'] != -99, 'partner_control1_drawn_LX' ] = np.array(all_df.loc[ c1partner_no99, 'drawn_LX' ])  
     true_pairs['partner_control1_IR_AGN_DON'] = [-99]*len(true_pairs)
@@ -630,6 +676,8 @@ def determine_pairs(all_df, current_zdraw_df, current_Mdraw_df, current_LXdraw_d
     true_pairs.loc[ true_pairs['partner_control2_idx'] != -99, 'partner_control2_drawn_z' ] = np.array(all_df.loc[ c2partner_no99, 'drawn_z' ]) 
     true_pairs['partner_control2_drawn_M'] = [-99]*len(true_pairs)
     true_pairs.loc[ true_pairs['partner_control2_idx'] != -99, 'partner_control2_drawn_M' ] = np.array(all_df.loc[ c2partner_no99, 'drawn_M' ])  
+    true_pairs['partner_control2_2sigma'] = [-99]*len(true_pairs)
+    true_pairs.loc[ true_pairs['partner_control2_idx'] != -99, 'partner_control2_2sigma' ] = np.array(all_df.loc[ c2partner_no99, 'SIG_DIFF' ])
     true_pairs['partner_control2_drawn_LX'] = [-99]*len(true_pairs)
     true_pairs.loc[ true_pairs['partner_control2_idx'] != -99, 'partner_control2_drawn_LX' ] = np.array(all_df.loc[ c2partner_no99, 'drawn_LX' ])  
     true_pairs['partner_control2_IR_AGN_DON'] = [-99]*len(true_pairs)
