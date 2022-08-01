@@ -9,6 +9,7 @@ pd.options.mode.chained_assignment = None  # default='warn' -> could change to N
 import numpy as np
 from numpy import random
 np.seterr(divide = 'ignore') #'warn' <- division issues in log10, no problem these nans are replaced later
+np.seterr(all="ignore")
 
 from time import sleep
 from tqdm import tqdm
@@ -34,15 +35,16 @@ cosmo = FlatLambdaCDM(H0=70 * u.km / u.s / u.Mpc, Tcmb0=2.725 * u.K, Om0=0.3) # 
 R_kpc = cosmo.arcsec_per_kpc_proper(0.5) # arcsec/kpc at z=0.5
 max_R_kpc = (150*u.kpc * R_kpc) # in arcseconds ### this is the bug right here
 
-mass_lo = 9 # lower mass limit of the more massive galaxy in a pair that we want to consider
+mass_lo = 8.5 # lower mass limit of the more massive galaxy in a pair that we want to consider
 gamma = 1.4 # for k correction calculation
 
 max_sep = 150 # kpc
-max_dv = 1000
+max_dv = 1000 # DUDE #
 
-sigma_cut = 1 # for individual PDF broadness
-zp_cut = 0.01 # for pairs that will negligently contribute to the final AGN fractions
-hmag_cut = 100 # essentially no cut
+sigma_cut = 100 # for individual PDF broadness
+zp_cut = 0 # for pairs that will negligently contribute to the final AGN fractions
+hmag_cut = 100 # essentially no cut <- not important 
+select_controls = False
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
 
@@ -52,18 +54,14 @@ def main():
     
     # we want to parallelize the data by fields, so:
     all_fields = ['GDS','EGS','COS','GDN','UDS']#,'COSMOS'] # COS is for CANDELS COSMOS
-    #all_fields = ['COSMOS']
+    # all_fields = ['COSMOS']
+    # process_samples('COSMOS')
     
     # Create a multiprocessing Pool
     pool = Pool() 
-    all_data = pool.map(process_samples, all_fields)
-    
-    combined_data = pd.concat(all_data)
-    # print(combined_data)
-        
-    # combined_data.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/conv_prob/no_cuts.csv', index=False)
-    
-    print('Done! ')
+    pool.map(process_samples, all_fields)
+            
+    print('Done!')
     
     # close pool
     pool.close()
@@ -108,31 +106,35 @@ def process_samples(field):
         df = df.reset_index(drop=True)
 
         
-    # df = df.iloc[:1000]        
+    # df = df.iloc[:500]        
     
     # there is no data draw in this method, go straight to getting projected pairs based on prime
     results = determine_pairs(df, field)
     
-    return results
+    return
     
 
 def determine_pairs(df, field):
     print('beginning determine_pairs() for ', field)
     # get preliminary list of pairs and isolated galaxies
     # make definite redshift cut:
-    all_df = df[ (df['ZPHOT_PEAK'] >= 0.5) & (df['ZPHOT_PEAK'] <= 3.0) ]
+    all_df = df[ (df['ZPHOT_PEAK'] >= 0.5) & (df['ZPHOT_PEAK'] <= 6.5) ]
     print(field, len(all_df))
     all_df = all_df.reset_index(drop=True)
     
     # calculate LX
     all_df['LX'] = ( all_df['FX'] * 4 * np.pi * ((cosmo.luminosity_distance(all_df['ZPHOT_PEAK']).to(u.cm))**2) * 
                                                                 ((1+all_df['ZPHOT_PEAK'])**(gamma-2)) )
-    # flag IR AGN
+   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+    
+    # Flag IR AGN based on Donley and Stern
+    # look at IR luminosities
     all_df['IR_AGN_DON'] = [0]*len(all_df)
     all_df['IR_AGN_STR'] = [0]*len(all_df)
     if field == 'GDN':
-        all_df = all_df.rename(columns={'IRAC_CH1_SCANDELS_FLUX':'IRAC_CH1_FLUX', 'IRAC_CH2_SCANDELS_FLUX':'IRAC_CH2_FLUX'})
-        
+        all_df = all_df.rename(columns={'IRAC_CH1_SCANDELS_FLUX':'IRAC_CH1_FLUX', 'IRAC_CH1_SCANDELS_FLUXERR':'IRAC_CH1_FLUXERR',
+                                        'IRAC_CH2_SCANDELS_FLUX':'IRAC_CH2_FLUX', 'IRAC_CH2_SCANDELS_FLUXERR':'IRAC_CH2_FLUXERR'})
+
     all_df.loc[ (np.log10(all_df['IRAC_CH3_FLUX']/all_df['IRAC_CH1_FLUX']) >= 0.08) &
                (np.log10(all_df['IRAC_CH4_FLUX']/all_df['IRAC_CH2_FLUX']) >= 0.15) &
                (np.log10(all_df['IRAC_CH4_FLUX']/all_df['IRAC_CH2_FLUX']) >= (1.21*np.log10(all_df['IRAC_CH3_FLUX']/all_df['IRAC_CH1_FLUX']))-0.27) &
@@ -156,26 +158,11 @@ def determine_pairs(df, field):
     # set the ones with incomplete data back to 0: POTENTIALLY UNECESSARY NOW (BELOW)
     all_df.loc[ (all_df['IRAC_CH1_FLUX'] <= 0) | (all_df['IRAC_CH2_FLUX'] <= 0) |
                (all_df['IRAC_CH3_FLUX'] <= 0) | (all_df['IRAC_CH4_FLUX'] <= 0), ['IR_AGN_DON', 'IR_AGN_STR'] ] = 0
+    all_df.loc[ (all_df['IRAC_CH1_FLUX']/all_df['IRAC_CH1_FLUXERR'] < 3) | (all_df['IRAC_CH2_FLUX']/all_df['IRAC_CH2_FLUXERR'] < 3) |
+               (all_df['IRAC_CH3_FLUX']/all_df['IRAC_CH3_FLUXERR'] < 3) | (all_df['IRAC_CH4_FLUX']/all_df['IRAC_CH4_FLUXERR'] < 3),
+              ['IR_AGN_DON', 'IR_AGN_STR'] ] = 0
     
-    # set the ones with flux detections in any band below the limiting magnitude flux density to 0 as well
-    if field == 'GDS': # [0.08953648 0.11481536 1.14815362 1.18032064]
-        all_df.loc[ (all_df['IRAC_CH1_FLUX'] < 0.08953648) | (all_df['IRAC_CH2_FLUX'] < 0.11481536) |
-               (all_df['IRAC_CH3_FLUX'] < 1.14815362) | (all_df['IRAC_CH4_FLUX'] < 1.18032064), ['IR_AGN_DON', 'IR_AGN_STR'] ] = 0
-    elif field == 'EGS': # [1.         0.75857758 3.63078055 2.7542287 ]
-        all_df.loc[ (all_df['IRAC_CH1_FLUX'] < 1) | (all_df['IRAC_CH2_FLUX'] < 0.75857758) |
-               (all_df['IRAC_CH3_FLUX'] < 3.63078055) | (all_df['IRAC_CH4_FLUX'] < 2.7542287), ['IR_AGN_DON', 'IR_AGN_STR'] ] = 0
-    elif field == 'COS': # [0.62517269  0.63095734 11.16863248 12.02264435]
-        all_df.loc[ (all_df['IRAC_CH1_FLUX'] < 0.62517269) | (all_df['IRAC_CH2_FLUX'] < 0.63095734) |
-               (all_df['IRAC_CH3_FLUX'] < 11.16863248) | (all_df['IRAC_CH4_FLUX'] < 12.02264435), ['IR_AGN_DON', 'IR_AGN_STR'] ] = 0
-    elif field == 'GDN': # [0.57543994 0.52480746 2.7542287  3.01995172]
-        all_df.loc[ (all_df['IRAC_CH1_FLUX'] < 0.57543994) | (all_df['IRAC_CH2_FLUX'] < 0.52480746) |
-               (all_df['IRAC_CH3_FLUX'] < 2.7542287) | (all_df['IRAC_CH4_FLUX'] < 3.01995172), ['IR_AGN_DON', 'IR_AGN_STR'] ] = 0
-    elif field == 'UDS': # [0.46989411 0.519996   4.36515832 4.5289758 ]
-        all_df.loc[ (all_df['IRAC_CH1_FLUX'] < 0.46989411) | (all_df['IRAC_CH2_FLUX'] < 0.519996) |
-               (all_df['IRAC_CH3_FLUX'] < 4.36515832) | (all_df['IRAC_CH4_FLUX'] < 4.5289758), ['IR_AGN_DON', 'IR_AGN_STR'] ] = 0
-    else:
-        print('FILLER FOR COSMOS LIMITING MAGS')
-    
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
     
     ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
     if field == 'GDS':
@@ -248,10 +235,13 @@ def determine_pairs(df, field):
     # print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
                          
     # calculate pair fraction for each projected pair:
-    pair_probs = load_pdfs(all_df.loc[ true_pairs['prime_index'], 'ID'], all_df.loc[ true_pairs['partner_index'], 'ID'], field)
+    pair_probs, pair_PdA = load_pdfs(all_df.loc[ true_pairs['prime_index'], 'ID'], all_df.loc[ true_pairs['partner_index'], 'ID'], 
+                           true_pairs['arc_sep'], field)
     print('pair probability calculated in ', field)
     true_pairs['pair_prob'] = pair_probs
     
+    np.save('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/conv_prob/'+field+'_arr_6.30', pair_PdA)
+        
     print('{0}: pair_count = {1}, iso count = {2}'.format(field, len(true_pairs), len(all_iso)))
     
     # add back control galaxies that are only included in pairs where pair_prob < 0
@@ -300,18 +290,21 @@ def determine_pairs(df, field):
     gtrue_pairs['partner_IR_AGN_STR'] = np.array(all_df.loc[gtrue_pairs['partner_index'], 'IR_AGN_STR'])
     gtrue_pairs['field'] = [field] * len(gtrue_pairs)
     
-
-    controls, c_flag = get_control(iso_idx, iso_mass, iso_z, iso_sig, pair_idx, pair_mass, pair_z, pair_sig)
-    # let's output the matched fraction based on c_flag
-    c_flag_all = np.concatenate(c_flag)
-    tp = len(c_flag_all)
-    tm = len(c_flag_all[ np.where(c_flag_all == 0) ])
-    tr = len(c_flag_all[ np.where(c_flag_all == 1) ])
-    tf = len(c_flag_all[ np.where(c_flag_all == 2) ])
-    print('UNIQUE MATCH FRACTION IN {} = {}'.format(field, tm/tp))
-    print('RECYCLED FRACTION IN {} = {}'.format(field, tr/tp))
-    print('MATCH FRACTION WITH RECYCLING IN {} = {}'.format(field, (tm+tr)/tp)) 
-    print('FAIL FRACTION IN {} = {}'.format(field, tf/tp)) 
+    if select_controls == True: ### DONT FORGET ABOUT SHUFFLING LATER ON
+        controls, c_flag = get_control(iso_idx, iso_mass, iso_z, iso_sig, pair_idx, pair_mass, pair_z, pair_sig)
+        # let's output the matched fraction based on c_flag
+        c_flag_all = np.concatenate(c_flag)
+        tp = len(c_flag_all)
+        tm = len(c_flag_all[ np.where(c_flag_all == 0) ])
+        tr = len(c_flag_all[ np.where(c_flag_all == 1) ])
+        tf = len(c_flag_all[ np.where(c_flag_all == 2) ])
+        print('UNIQUE MATCH FRACTION IN {} = {}'.format(field, tm/tp))
+        print('RECYCLED FRACTION IN {} = {}'.format(field, tr/tp))
+        print('MATCH FRACTION WITH RECYCLING IN {} = {}'.format(field, (tm+tr)/tp)) 
+        print('FAIL FRACTION IN {} = {}'.format(field, tf/tp)) 
+    else:
+        controls = np.full((len(pair_idx), 2), -99)
+        c_flag = np.full((len(pair_idx), 2), -99)
     
     print('made it here ', field)
     
@@ -417,14 +410,23 @@ def determine_pairs(df, field):
     
     ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
     
+    gtrue_pairs.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/conv_prob/'+field+'_6.30.csv', index=False)
+        
+    print('saved in ', field)
+    
     return gtrue_pairs
     
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 
-def load_pdfs(gal1, gal2, field):
+def load_pdfs(gal1, gal2, theta, field):
     print('beginning conv_prob() for ', field)
     
     all_prob = []
+    all_PdA = []
+    
+    print(field, len(gal1))
+    
+    dA = np.linspace(0, 150, num=1500, endpoint=True)
     
     # the COSMOS PDF are all loaded together, so do this outside for loop:
     if field == 'COSMOS':
@@ -433,8 +435,10 @@ def load_pdfs(gal1, gal2, field):
             COSMOS_PZ_arr = np.array(data[0].data)
         COSMOS_PZ_arrf = COSMOS_PZ_arr.byteswap().newbyteorder()
         COSMOS_PZ = pd.DataFrame(COSMOS_PZ_arrf)
+        z = COSMOS_PZ.loc[0,1:].to_numpy()
+        COSMOS_PZ = COSMOS_PZ.T
     
-    for ID1, ID2 in zip(gal1, gal2): 
+    for ID1, ID2, th in tqdm(zip(gal1, gal2, theta), miniters=100): 
         # load PDFs based on string ID
         ID1_str = str(ID1)
         if len(ID1_str) == 1: id_string1 = '0000'+ID1_str
@@ -510,18 +514,21 @@ def load_pdfs(gal1, gal2, field):
             z = np.array(PDF1_load['z'])
             
         elif field == 'COSMOS':
-            # get the correct P(z) for each ID:
-            # ID is +1 the index of the master COSMOS2020 df, so simply indexing the LEPHARE catalog with ID should suffice
-            PDF1 = COSMOS_PZ.loc[ (COSMOS_PZ[0] == ID1), 1:].to_numpy() / np.sum(COSMOS_PZ.loc[ (COSMOS_PZ[0] == ID1), 1:].to_numpy()) 
-            PDF2 = COSMOS_PZ.loc[ (COSMOS_PZ[0] == ID2), 1:].to_numpy() / np.sum(COSMOS_PZ.loc[ (COSMOS_PZ[0] == ID2), 1:].to_numpy())
-            z = COSMOS_PZ.loc[0,1:].to_numpy()
-       
+            PDF1 = np.array(COSMOS_PZ.loc[ 1:, ID1 ])
+            PDF2 = np.array(COSMOS_PZ.loc[ 1:, ID2 ])
         
         Cv_prob = Convdif(z, PDF1, PDF2, dv_lim=max_dv)
         
+        # should do the angular diameter distance here and integrate for each bin in post
+        PdA = PdA_prob(PDF1, PDF2, th, z, dA)
+        
         all_prob.append(Cv_prob)
+        all_PdA.append(PdA)
+        
+        ### WRITE THIS TO SPIT OUT ARRAYS FOR THE ENTIRE GROUP ###
+        ### WILL ALSO NEED THIS FROM P(Z1Z2) = NORMALIZED PDF1 * PDF2 ###
     
-    return(all_prob)
+    return all_prob, np.array(all_PdA)
 
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 
@@ -538,7 +545,7 @@ def radvel(z):
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 
 def Convdif(z_all, Pz1, Pz2, dv_lim=1000):
-    
+        
     # perform a change of variables into velocity space
     v_all = radvel(z_all)
     Pv1 = Pz1 * dzdv(v_all)
@@ -546,8 +553,8 @@ def Convdif(z_all, Pz1, Pz2, dv_lim=1000):
     
     # interpolate the velocities to get evenly spaced points like in redshift space
     v_new = np.linspace(0,radvel(10),num=10000)
-    fintp1 = interp1d(v_all, Pv1, kind='cubic')
-    fintp2 = interp1d(v_all, Pv2, kind='cubic')
+    fintp1 = interp1d(v_all, Pv1, kind='linear')
+    fintp2 = interp1d(v_all, Pv2, kind='linear')
     
     # extend the inteprolated array
     all_v_neg = -1*v_new[::-1]
@@ -562,6 +569,81 @@ def Convdif(z_all, Pz1, Pz2, dv_lim=1000):
     prob = np.trapz(v_conv[rnge], x=all_ve[rnge])
     
     return prob
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+
+def PdA_prob(PDF1, PDF2, theta, z, dA):
+    
+    comb_PDF = PDF1*PDF2
+    comb_PDF = comb_PDF / np.trapz(comb_PDF, x=z)
+    
+    # # attempt change of variable
+    # dA = ( ang_diam_dist(z, theta) )
+    # dAdz = np.gradient(dA,z)
+    # dzdA_test = dAdz**(-1)
+
+    # # will need to split into two monochromatic parts of dA:
+    # split_z = z[np.where(dA==np.max(dA))]
+
+    # so split 0-1.61 (1) and 1.62-10 (2)
+    dA1 = ang_diam_dist( z[np.where(z <= 1.61)], theta )
+    dA2 = ang_diam_dist( z[np.where(z > 1.61)], theta )
+    z1 = z[np.where(z <= 1.61)]
+    z2 = z[np.where(z > 1.61)]
+    comb_PDF1 = comb_PDF[np.where(z <= 1.61)] 
+    comb_PDF2 = comb_PDF[np.where(z > 1.61)] 
+
+    PdA11 = comb_PDF1 * np.abs(dzdA(dA1, z1, theta))
+    PdA11 = np.nan_to_num(PdA11) # fill the nan casued by divisiom ny zero
+    PdA12 = comb_PDF2 * np.abs(dzdA(dA2, z2, theta))
+
+    dA_new = dA
+    fintp1 = interp1d(dA1, PdA11, kind='linear', bounds_error=False, fill_value=0)
+    fintp2 = interp1d(dA2, PdA12, kind='linear', bounds_error=False, fill_value=0)
+
+    intr_PdA1 = fintp1(dA_new)
+    intr_PdA2 = fintp2(dA_new)
+
+    PdA = intr_PdA1+intr_PdA2
+    
+    PdA = PdA / np.trapz(PdA, x=dA_new)
+    
+    return np.nan_to_num(PdA)
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+
+# def angular diameter function:
+def ang_diam_dist(z, theta, H0=70, Om_m=0.3, Om_rel=0, Om_lam=0.7, Om_0=1):
+    
+    c = 2.998e5 # km/s
+    try:
+        zs = np.linspace(0,z,10, endpoint=True, axis=1) # numerically integrate
+    except:
+        zs = np.linspace(0,z,10, endpoint=True)
+    dA = ( c / (H0*(1+z)) ) * np.trapz( ( 1 / np.sqrt( Om_m*(1+zs)**3 + Om_rel*(1+zs)**4 + Om_lam + (1-Om_0)*(1+zs)**2 ) ), x=zs )
+    
+    return dA * theta * 1000 / ((180/np.pi)*3600)
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+
+def dzdA(A, z, theta, H0=70, Om_m=0.3, Om_rel=0, Om_lam=0.7, Om_0=1):
+    
+    c = 2.998e5 # km/s
+    
+    try:
+        zs = np.linspace(0,z,10, endpoint=True, axis=1) # numerically integrate
+    except:
+        zs = np.linspace(0,z,10, endpoint=True)
+    
+    dzdA = - (c * np.trapz( ( 1 / np.sqrt( Om_m*(1+zs)**3 + Om_rel*(1+zs)**4 + Om_lam + (1-Om_0)*(1+zs)**2 ) ), x=zs )) / (H0*A**2)
+    
+    # dAdz = ( ( c/(H0*(1+z))) * ( 1 / np.sqrt( Om_m*(1+z)**3 + Om_rel*(1+z)**4 + Om_lam + (1-Om_0)*(1+z)**2 ) ) +
+    #         (np.trapz( ( 1 / np.sqrt( Om_m*(1+zs)**3 + Om_rel*(1+zs)**4 + Om_lam + (1-Om_0)*(1+zs)**2 ) ), x=zs ) * (-c/H0)*((1+z)**-2) ))
+    
+    dzdA = dzdA * theta * 1000 / ((180/np.pi)*3600) # convert to kpc/"
+        
+    return dzdA
 
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 
