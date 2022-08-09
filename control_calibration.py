@@ -3,6 +3,7 @@
 # calibrating the control selection technique for the convolution AGN merger
 
 # import libraries
+import sys
 import numpy as np
 from numpy import random
 np.seterr(all="ignore")
@@ -30,13 +31,14 @@ from functools import partial
 
 # INPUTS
 which_bins = 1 # only match out to this kpc bin
-iso_method = 'none' # 'high_prob', 'proj_mask' # different cuts to the isolated dataframe
-iso_min_prob = 0.2 # look at distribution and decide
-dif_lim = 0.5
+iso_method = 'proj_mask' #'none', 'high_prob', 'proj_mask' # different cuts to the isolated dataframe
+iso_min_prob = 0.1 # look at distribution and decide
+dif_lim = 0.1
 iters = 100
 
 # define main function
 def main():
+    print('Beginning main()')
     # load in convolution output
     PATH = '/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/conv_prob/'
     with open(PATH+'ALL_FIELDS_HIGH_MASS_8.06.pkl', 'rb') as f: # MASS_PARTNER > 10
@@ -48,95 +50,119 @@ def main():
     # kpc projected separation bins I want:
     keys = list(pam_df.keys())
     bin_dfs = { key: pam_df[key] for key in keys[:which_bins] }
-        
     
     # have a dictionary to hold info for each bin, inside of it will be however many dictionaries for:
     bin_storage = {}
-    for key in keys:
+    for key in keys[:which_bins]:
         bin_storage[key] = []
+        
+    # Create a multiprocessing Pool
+    print('Creating multiprocessing Pool')
+    pool = Pool() # going to return as a list of dictionaries
+    all_iter_bin_storage = pool.map(partial(method, bin_dfs=bin_dfs), range(iters))
+                
+    # close pool
+    pool.close()
+    pool.join()
     
-# def method(): # a proxy function 
-    # %%%%%% Parallelise here %%%%%%% #
-    # %%%%%% return 'iter_df' from each one %%%%%%% #
-    for i in range(iters):
-        controls = orchestrate_control(bin_dfs, iso_method)
-
-        # calculate p value from distribution
-        for key in controls.keys():
-            storage = {}
-            pair_df = bin_dfs[key]
-            iso_df = controls[key]
-            # calculate a p value for the entire sample:
-            n_controls = len(iso_df)
-            all_Dn_m, all_p_m = ks_weighted( pair_df['mass'], iso_df['mass'], pair_df['pair_prob'], np.ones_like(iso_df['mass']) )
-            all_Dn_z, all_p_z = ks_weighted( pair_df['z'], iso_df['z'], pair_df['pair_prob'], np.ones_like(iso_df['z']) )
-            all_Dn_s, all_p_s = ks_weighted( pair_df['2sig'], iso_df['2sig'], pair_df['pair_prob'], np.ones_like(['2sig']) )
-            storage['all_Dn_m'] = all_Dn_m
-            storage['all_Dn_z'] = all_Dn_z
-            storage['all_Dn_s'] = all_Dn_s
-            storage['all_p_m'] = all_p_m
-            storage['all_p_z'] = all_p_z
-            storage['all_p_s'] = all_p_s
-            storage['all_n'] = n_controls
-
-            # also calculate an AGN fraction:
-            iso_df['iXAGN'] = [0]*len(iso_df)
-            iso_df['iDoAGN'] = [0]*len(iso_df)
-            iso_df['iStAGN'] = [0]*len(iso_df)
-            LX_AGN = 42
-            iso_df.loc[ np.log10(iso_df['LX']) > LX_AGN, 'iXAGN' ] = 1
-            iso_df.loc[ iso_df['IR_AGN_DON'] == 1, 'iDoAGN' ] = 1
-            iso_df.loc[ iso_df['IR_AGN_STR'] == 1, 'iStAGN' ] = 1
-            iX_frac = np.sum( iso_df['iXAGN'] ) / len( iso_df['iXAGN'] )
-            iDo_frac = np.sum( iso_df['iDoAGN'] ) / len( iso_df['iDoAGN'] )
-            iSt_frac = np.sum( iso_df['iStAGN'] ) / len( iso_df['iStAGN'] )
-            storage['X_fAGN'] = iX_frac
-            storage['DIR_fAGN'] = iDo_frac
-            storage['SIR_fAGN'] = iSt_frac
-
-            # now p values for each field
-            for field in controls[key]['field'].unique():
-                n_controls = len(iso_df.loc[iso_df['field']==field])
-                Dn_m, p_m = ks_weighted( pair_df.loc[pair_df['field']==field, 'mass'], 
-                                    iso_df.loc[iso_df['field']==field, 'mass'],
-                                    pair_df.loc[pair_df['field']==field, 'pair_prob'], 
-                                    np.ones_like(iso_df.loc[iso_df['field']==field, 'mass']) )
-                Dn_z, p_z = ks_weighted( pair_df.loc[pair_df['field']==field, 'z'], 
-                                    iso_df.loc[iso_df['field']==field, 'z'],
-                                    pair_df.loc[pair_df['field']==field, 'pair_prob'], 
-                                    np.ones_like(iso_df.loc[iso_df['field']==field, 'z']) )
-                Dn_s, p_s = ks_weighted( pair_df.loc[pair_df['field']==field, '2sig'], 
-                                    iso_df.loc[iso_df['field']==field, '2sig'],
-                                    pair_df.loc[pair_df['field']==field, 'pair_prob'], 
-                                    np.ones_like(iso_df.loc[iso_df['field']==field, '2sig']) )
-                storage[field+'_Dn_m'] = all_Dn_m
-                storage[field+'_Dn_z'] = all_Dn_z
-                storage[field+'_Dn_s'] = all_Dn_s
-                storage[field+'_p_m'] = all_p_m
-                storage[field+'_p_z'] = all_p_z
-                storage[field+'_p_s'] = all_p_s
-                storage[field+'_n'] = n_controls
-
-            # convert storage into a df
-            iter_df = pd.DataFrame.from_dict(storage)
-            # append it to the appropritiate storage dictionary:
-            bin_storage[key].append(iter_df) # this way I can just concatenate at the end
+    for dic in all_iter_bin_storage:
+        for key in dic.keys():
+            bin_storage[key].append(dic[key])
             
-    # now concat iteration dfs:
+    # will need to loop once more to concat dfs and save:
     for key in bin_storage.keys():
         key_final_df = pd.DataFrame( np.concatenate(bin_storage[key]), columns=pd.DataFrame(bin_storage[key][0]).columns )
-        # and save:
-        key_final_df.to_csv(PATH+'control_cal/NAME.csv', index=False)
+        key_final_df.to_csv(PATH+'control_cal/method-'+iso_method+'_dif_lim-'+str(dif_lim)+'_key_'+key+'.csv', index=False)
         print('Iteration data saved in bin {}'.format(key))
         
-    return         
+        ### ~~~ WILL ALSO BE WANTING AN UNCERTAINTY ON THE AGN FRACTIONS ~~~ ###
+        
+    print('Done! Now exiting.')
+    return
+    
+def method(n, bin_dfs): # a proxy function for parallelization
+    
+    print('Beginning iteration {}'.format(n))
+    
+    # create dictionary to hold df for each bin
+    bin_dict = {}
+    controls = orchestrate_control(bin_dfs, iso_method, n)
+
+    # calculate p value from distribution
+    for key in controls.keys():
+        storage = {}
+        pair_df = bin_dfs[key]
+        iso_df = controls[key]
+        # calculate a p value for the entire sample:
+        n_controls = len(iso_df)
+        all_Dn_m, all_p_m = ks_weighted( np.array(pair_df['mass']), np.array(iso_df['mass']), 
+                                        np.array(pair_df['pair_prob']), np.ones_like(iso_df['mass']) )
+        all_Dn_z, all_p_z = ks_weighted( np.array(pair_df['z']), np.array(iso_df['z']), 
+                                        np.array(pair_df['pair_prob']), np.ones_like(iso_df['z']) )
+        all_Dn_s, all_p_s = ks_weighted( np.array(pair_df['2sig']), np.array(iso_df['2sig']), 
+                                        np.array(pair_df['pair_prob']), np.ones_like(iso_df['2sig']) )
+        storage['all_Dn_m'] = all_Dn_m
+        storage['all_Dn_z'] = all_Dn_z
+        storage['all_Dn_s'] = all_Dn_s
+        storage['all_p_m'] = all_p_m
+        storage['all_p_z'] = all_p_z
+        storage['all_p_s'] = all_p_s
+        storage['all_n'] = n_controls
+
+        # also calculate an AGN fraction:
+        iso_df['iXAGN'] = [0]*len(iso_df)
+        iso_df['iDoAGN'] = [0]*len(iso_df)
+        iso_df['iStAGN'] = [0]*len(iso_df)
+        LX_AGN = 10**42
+        iso_df.loc[ iso_df['LX'] > LX_AGN, 'iXAGN' ] = 1
+        iso_df.loc[ iso_df['IR_AGN_DON'] == 1, 'iDoAGN' ] = 1
+        iso_df.loc[ iso_df['IR_AGN_STR'] == 1, 'iStAGN' ] = 1
+        iX_frac = np.sum( iso_df['iXAGN'] ) / len( iso_df['iXAGN'] )
+        iDo_frac = np.sum( iso_df['iDoAGN'] ) / len( iso_df['iDoAGN'] )
+        iSt_frac = np.sum( iso_df['iStAGN'] ) / len( iso_df['iStAGN'] )
+        storage['X_fAGN'] = iX_frac
+        storage['DIR_fAGN'] = iDo_frac
+        storage['SIR_fAGN'] = iSt_frac
+
+        # now p values for each field
+        for field in controls[key]['field'].unique():
+            n_controls = len(iso_df.loc[iso_df['field']==field])
+            Dn_m, p_m = ks_weighted( np.array(pair_df.loc[pair_df['field']==field, 'mass']), 
+                                np.array(iso_df.loc[iso_df['field']==field, 'mass']),
+                                np.array(pair_df.loc[pair_df['field']==field, 'pair_prob']), 
+                                np.ones_like(iso_df.loc[iso_df['field']==field, 'mass']) )
+            Dn_z, p_z = ks_weighted( np.array(pair_df.loc[pair_df['field']==field, 'z']), 
+                                np.array(iso_df.loc[iso_df['field']==field, 'z']),
+                                np.array(pair_df.loc[pair_df['field']==field, 'pair_prob']), 
+                                np.ones_like(iso_df.loc[iso_df['field']==field, 'z']) )
+            Dn_s, p_s = ks_weighted( np.array(pair_df.loc[pair_df['field']==field, '2sig']), 
+                                np.array(iso_df.loc[iso_df['field']==field, '2sig']),
+                                np.array(pair_df.loc[pair_df['field']==field, 'pair_prob']), 
+                                np.ones_like(iso_df.loc[iso_df['field']==field, '2sig']) )
+            storage[field+'_Dn_m'] = all_Dn_m
+            storage[field+'_Dn_z'] = all_Dn_z
+            storage[field+'_Dn_s'] = all_Dn_s
+            storage[field+'_p_m'] = all_p_m
+            storage[field+'_p_z'] = all_p_z
+            storage[field+'_p_s'] = all_p_s
+            storage[field+'_n'] = n_controls
+
+        # convert storage into a df
+        iter_df = pd.DataFrame(storage, index=[n])
+        # append it to the appropritiate storage dictionary:
+        bin_dict[key] = iter_df # this way I can just concatenate at the end
+        
+    print('Iteration {} completed'.format(n))
+        
+    return bin_dict        
     
     
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 
-def orchestrate_control(bin_dfs, iso_method): # may want to write this to do one bin at a time
+def orchestrate_control(bin_dfs, iso_method, it): # may want to write this to do one bin at a time
     
-    all_bin_df = pd.concat([all_df[key] for key in all_df]) # going to start with just one bin, but for flexibility later
+    # print('Assembling isolated sources')
+    all_bin_df = pd.concat([bin_dfs[key] for key in bin_dfs]) # going to start with just one bin, but for flexibility later
     
     # generate the isolated df based on paired sources to exclude:
     iso_df = generate_iso(all_bin_df, iso_method) ### ~~~ UNSURE IF THIS WOULD WORK PAST THE FIRST BIN ~~~ ####
@@ -159,9 +185,9 @@ def orchestrate_control(bin_dfs, iso_method): # may want to write this to do one
     # count fractional pairs in each bin
     pair_count = []
     
-    print('generating PDFs')
+    # print('Generating PDFs')
     for i, key in enumerate(bin_dfs):
-        print(key)
+        # print(key)
         iso_dict[key] = iso_df
         zms[key] = {}
         Pzms[key] = {}
@@ -188,10 +214,11 @@ def orchestrate_control(bin_dfs, iso_method): # may want to write this to do one
     total_frac_pairs = np.sum(pair_count)
     
     
-    for key in list(zms.keys()): ### ~~~ EASILY PARALLELIZIABLE ~~~ ###
+    for key in list(zms.keys()):
         for field in list(zms[key].keys()):
-            print('selecting controls in {0}, {1}'.format(field, bin_field_count_distr[key][field]))
-            drawn_z, drawn_m, drawn_s = gen_gal(zms[key][field], Pzms[key][field], n=round(1000*bin_field_count_distr[key][field]))
+            # print('selecting controls in {0}, {1}'.format(field, bin_field_count_distr[key][field]))
+            drawn_z, drawn_m, drawn_s = gen_gal(zms[key][field], Pzms[key][field], 
+                                                n=round(1000*bin_field_count_distr[key][field]), seed=it)
             # get iso
             control = get_control(iso_df.loc[ (iso_df['field'] == field) ], drawn_z, drawn_m, drawn_s, dif_lim=dif_lim)
             controls[key].append(control)
@@ -206,8 +233,6 @@ def orchestrate_control(bin_dfs, iso_method): # may want to write this to do one
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 
 def generate_iso(all_df, iso_method):
-    
-    print('assembling isolated sources')
 
     # load in all fields
     fields = list(all_df['field'].unique())
@@ -383,10 +408,18 @@ def gengalPDF(prop_df, probs, sensitivity=10): # sensitivity is the number of bi
 
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 
-def gen_gal(gal_props, gal_PDF, n):
+def gen_gal(gal_props, gal_PDF, n, seed, new_seed=True):
     
     aa_idx = list(range(0,len(gal_props)))
-    choice_idx = random.choice(aa_idx, size=n, p=gal_PDF)
+    # broadcast these seeds randomly based on main processors seed:
+    # assuming this will give the same random integer across processors
+    # this should allow for the seeds to be unique across different runs
+    if new_seed == True:
+        main_seed = random.randint(0,10000)
+        seed = seed*main_seed
+    
+    random.seed(seed) ### ~~~ USE THE SEED OF THE MAIN PROCESSOR TO THEN BROADCAST THESE ~~~ ###
+    choice_idx = random.choice(aa_idx, size=n, p=gal_PDF) ### ~~~ MAY BE SEEDED ~~~ ###
     drawn_gal = gal_props[choice_idx]
 
     drawn_z = drawn_gal[:,0]
@@ -423,9 +456,9 @@ def get_control(iso_df, z_arr, m_arr, sig_arr, dif_lim=0.5):
         else:
             matches.append(match)
             iso_df = cmatch_df.drop( cmatch_df[ (cmatch_df['ID'] == match['ID']) ].index ).reset_index(drop=True)
-            if np.any(milestones==len(matches)) == True:
-                print('{0} matches /// dif = {1} /// {2} left'.format(len(matches), match['dif'], len(cmatch_df)))
-                # how to round to 2 sgfgs?
+            # if np.any(milestones==len(matches)) == True:
+            #     print('{0} matches /// dif = {1} /// {2} left'.format(len(matches), match['dif'], len(cmatch_df)))
+            #     # how to round to 2 sgfgs?
         
     return matches
     
