@@ -29,6 +29,7 @@ import sys
 
 PATH = '/nobackup/c1029594/CANDELS_AGN_merger_data/Pair Project - Updated Data/'
 cPATH = '/nobackup/c1029594/CANDELS_AGN_merger_data/COSMOS_data/'
+mPATH = '/nobackup/c1029594/CANDELS_AGN_merger_data/MODEL/Input_data/'
 
 cosmo = FlatLambdaCDM(H0=70 * u.km / u.s / u.Mpc, Tcmb0=2.725 * u.K, Om0=0.3) # 0.7 for omega
 # determine conservative ang separation correspondong to 150 kpc at z = 0.5
@@ -53,7 +54,7 @@ def main():
     print('beginning main()')
     
     # we want to parallelize the data by fields, so:
-    all_fields = ['GDS','EGS','COS','GDN','UDS']#,'COSMOS'] # COS is for CANDELS COSMOS
+    all_fields = ['GDS','EGS','COS','GDN','UDS','COSMOS'] # COS is for CANDELS COSMOS
     # all_fields = ['COSMOS']
     # process_samples('COSMOS')
     
@@ -66,6 +67,8 @@ def main():
     # close pool
     pool.close()
     pool.join()
+    
+    return
     
 def process_samples(field):
     print('beginning process_samples() for {}'.format(field))
@@ -106,10 +109,11 @@ def process_samples(field):
         df = df.reset_index(drop=True)
 
         
+    # ### ~~~ TEST RUN ~~~ ###
     # df = df.iloc[:500]        
     
     # there is no data draw in this method, go straight to getting projected pairs based on prime
-    results = determine_pairs(df, field)
+    determine_pairs(df, field)
     
     return
     
@@ -118,7 +122,7 @@ def determine_pairs(df, field):
     print('beginning determine_pairs() for ', field)
     # get preliminary list of pairs and isolated galaxies
     # make definite redshift cut:
-    all_df = df[ (df['ZPHOT_PEAK'] >= 0.5) & (df['ZPHOT_PEAK'] <= 6.5) ]
+    all_df = df[ (df['ZPHOT_PEAK'] >= 0.45) & (df['ZPHOT_PEAK'] <= 3.05) ]  ### ~~~ I CHANGED THIS ~~~ ###
     print(field, len(all_df))
     all_df = all_df.reset_index(drop=True)
     
@@ -234,18 +238,44 @@ def determine_pairs(df, field):
     # print(field, len(all_df), len(np.unique(np.concatenate((true_pairs['prime_index'], true_pairs['partner_index'])))), len(iso_unq))
     # print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
                          
-    # calculate pair fraction for each projected pair:
+    # # calculate pair fraction for each projected pair:
     pair_probs, pair_PdA = load_pdfs(all_df.loc[ true_pairs['prime_index'], 'ID'], all_df.loc[ true_pairs['partner_index'], 'ID'], 
                            true_pairs['arc_sep'], field)
+    
+    # ### ~~~ save input data for the model then end the program ~~~ ###
+    # load_pdfs(all_df.loc[ true_pairs['prime_index'], 'ID'], all_df.loc[ true_pairs['partner_index'], 'ID'], 
+    #                        true_pairs['arc_sep'], field)
+    # model_df = pd.DataFrame( {'Field': field*len(true_pairs),
+    #                                   'ID1': np.array(all_df.loc[ true_pairs['prime_index'], 'ID']),
+    #                                   'ID2': np.array(all_df.loc[ true_pairs['partner_index'], 'ID']),
+    #                                   'M1': np.array(all_df.loc[ true_pairs['prime_index'], 'MASS' ]),
+    #                                   'M2': np.array(all_df.loc[ true_pairs['partner_index'], 'MASS' ]),
+    #                                   'fAGN1_X': np.array(all_df.loc[ true_pairs['prime_index'], 'LX' ]),
+    #                                   'fAGN2_X': np.array(all_df.loc[ true_pairs['partner_index'], 'LX' ]),
+    #                                   'fAGN1_IR': np.array(all_df.loc[ true_pairs['prime_index'], 'IR_AGN_DON' ]),
+    #                                   'fAGN2_IR': np.array(all_df.loc[ true_pairs['partner_index'], 'IR_AGN_DON' ])} )
+    # # do the fine tuning of this in post
+    # model_df.to_csv(mPATH+'cat_'+field+'.csv', index=False)
+    # print('Data saved! now exiting {}'.format(field))
+    # return
+    # ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+    
+    
     print('pair probability calculated in ', field)
     true_pairs['pair_prob'] = pair_probs
-    
-    np.save('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/conv_prob/'+field+'_arr_6.30', pair_PdA)
-        
-    print('{0}: pair_count = {1}, iso count = {2}'.format(field, len(true_pairs), len(all_iso)))
+            
+    # print('{0}: pair_count = {1}, iso count = {2}'.format(field, len(true_pairs), len(all_iso)))
     
     # add back control galaxies that are only included in pairs where pair_prob < 0
+    true_pairs = true_pairs.reset_index(drop=True)
     gtrue_pairs = true_pairs[ true_pairs['pair_prob'] >= zp_cut ] ### MAY NEED TO RESET INDEX ###
+    # print(gtrue_pairs.index, len(pair_PdA))
+    pair_PdA_gt0 = pair_PdA[gtrue_pairs.index]
+    # save PdA arrays
+    hdu_dA = fits.PrimaryHDU(pair_PdA_gt0)
+    hdul_dA = fits.HDUList([hdu_dA])
+    hdul_dA.writeto('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/conv_prob/PdA_output/PdA_'+field+'_8.09.fits', overwrite=True)
+    print('PdA array saved in {}'.format(field))
     gtrue_pairs = gtrue_pairs.reset_index(drop=True)
     
     # add galaxies that aren't pairs into the isolated sample:
@@ -410,11 +440,11 @@ def determine_pairs(df, field):
     
     ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
     
-    gtrue_pairs.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/conv_prob/'+field+'_6.30.csv', index=False)
+    gtrue_pairs.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/conv_prob/conv_output/'+field+'_8.09.csv', index=False)
         
     print('saved in ', field)
     
-    return gtrue_pairs
+    return
     
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 
@@ -426,7 +456,10 @@ def load_pdfs(gal1, gal2, theta, field):
     
     print(field, len(gal1))
     
-    dA = np.linspace(0, 150, num=1500, endpoint=True)
+    dA = np.linspace(0, 150, num=1501)
+    # define array sizes to save distributions as
+    PdA_2sav = np.zeros((len(gal1), len(dA)+2)) # so I can add the IDs and field as a check
+    Pzz_2sav = np.zeros((len(gal1), 1001)) # length of z array
     
     # the COSMOS PDF are all loaded together, so do this outside for loop:
     if field == 'COSMOS':
@@ -438,7 +471,7 @@ def load_pdfs(gal1, gal2, theta, field):
         z = COSMOS_PZ.loc[0,1:].to_numpy()
         COSMOS_PZ = COSMOS_PZ.T
     
-    for ID1, ID2, th in tqdm(zip(gal1, gal2, theta), miniters=100): 
+    for i, (ID1, ID2, th) in tqdm(enumerate(zip(gal1, gal2, theta)), miniters=100): 
         # load PDFs based on string ID
         ID1_str = str(ID1)
         if len(ID1_str) == 1: id_string1 = '0000'+ID1_str
@@ -451,7 +484,7 @@ def load_pdfs(gal1, gal2, theta, field):
         if len(ID2_str) == 2: id_string2 = '000'+ID2_str
         if len(ID2_str) == 3: id_string2 = '00'+ID2_str
         if len(ID2_str) == 4: id_string2 = '0'+ID2_str
-        if len(ID2_str) == 5: id_string2 = ID2_str
+        if len(ID2_str) == 5: id_string2 = ID2_str        ### PUT ALL THESE PDF FILES INTO ONE FITS FILE => FASTER ###
         
         if field == "GDS":
             pdf_filename1 = '/nobackup/c1029594/CANDELS_AGN_merger_data/Data - All Fields/GOODSS_OPTIMIZED03/ALL_OPTIMIZED_PDFS_GOODSS_ID'+id_string1+'.pzd'
@@ -520,15 +553,30 @@ def load_pdfs(gal1, gal2, theta, field):
         Cv_prob = Convdif(z, PDF1, PDF2, dv_lim=max_dv)
         
         # should do the angular diameter distance here and integrate for each bin in post
-        PdA = PdA_prob(PDF1, PDF2, th, z, dA)
+        PdA, comb_PDF = PdA_prob(PDF1, PDF2, th, z, dA)
         
         all_prob.append(Cv_prob)
-        all_PdA.append(PdA)
+        # all_PdA.append(PdA)
         
-        ### WRITE THIS TO SPIT OUT ARRAYS FOR THE ENTIRE GROUP ###
-        ### WILL ALSO NEED THIS FROM P(Z1Z2) = NORMALIZED PDF1 * PDF2 ###
+#         ### WRITE THIS TO SPIT OUT ARRAYS FOR THE ENTIRE GROUP ###
+        # add the IDs to the first two entries
+        PdA_2sav[i,0] = ID1
+        PdA_2sav[i,1] = ID2
+        PdA_2sav[i,2:] = PdA
+#         Pzz_2sav[i,:] = comb_PDF
+        
+    ### SAVE AS A FITS FILE ###
+    # hdu_dA = fits.PrimaryHDU(PdA_2sav)
+    # hdul_dA = fits.HDUList([hdu_dA])
+    # hdul_dA.writeto(mPATH+'/TEST_PdA_'+field+'_8.09.fits', overwrite=True)
+#     hdu_zz = fits.PrimaryHDU(Pzz_2sav)
+#     hdul_zz = fits.HDUList([hdu_zz])
+#     hdul_zz.writeto(mPATH+'/Pzz_'+field+'.fits', overwrite=True)
     
-    return all_prob, np.array(all_PdA)
+    # np.savetxt(mPATH+'/PdA_'+field+'.txt', PdA_2sav)
+    # np.savetxt(mPATH+'/Pzz_'+field+'.txt', Pzz_2sav)
+            
+    return all_prob, PdA_2sav #####################
 
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 
@@ -608,7 +656,7 @@ def PdA_prob(PDF1, PDF2, theta, z, dA):
     
     PdA = PdA / np.trapz(PdA, x=dA_new)
     
-    return np.nan_to_num(PdA)
+    return np.nan_to_num(PdA), comb_PDF
 
 
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
