@@ -46,6 +46,7 @@ sigma_cut = 100 # for individual PDF broadness
 zp_cut = 0 # for pairs that will negligently contribute to the final AGN fractions
 hmag_cut = 100 # essentially no cut <- not important 
 select_controls = False
+z_type = 'p' # ['p', 'ps' ,'s']
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
 
@@ -73,40 +74,18 @@ def main():
 def process_samples(field):
     print('beginning process_samples() for {}'.format(field))
     
-    # load in catalogs
+    # load in catalogs: <== specify column dtypes
     if field == 'COSMOS':
-        df = pd.read_csv(cPATH+'select_COSMOS2020.csv')
-        df['SIG_DIFF'] = df['lp_zPDF_u68'] - df['lp_zPDF_l68']
-        df = df[ (df['lp_type'] != 1) & (df['lp_type'] != -99) & (df['lp_mass_med'] > (mass_lo-1)) & 
-           (df['FLAG_COMBINED'] == 0) & (df['SIG_DIFF'] < sigma_cut)]
-        
-        df = df.rename(columns={'ALPHA_J2000':'RA', 'DELTA_J2000':'DEC', 'lp_mass_med':'MASS', 'lp_zPDF':'ZPHOT_PEAK',
-                               'F0.5-10_2015':'FX', 'UVISTA_H_MAG_APER2':'HMAG'})
-        df = df.reset_index(drop=True)
-
+        df = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/CANDELS_COSMOS_CATS/'+field+'_data.csv',
+                        dtype={'ZSPEC_R':object})
+        df = df.loc[ (df['LP_TYPE'] != 1) & (df['LP_TYPE'] != -99) & (df['MASS'] > (mass_lo-1)) & 
+            (df['FLAG_COMBINED'] == 0) & (df['SIG_DIFF'] < sigma_cut)]
     else:
-        df = pd.read_csv(PATH+'CANDELS_Catalogs/CANDELS.'+field+'.1018.Lx_best.wFx_AIRD.csv')
-        # add the zphot data
-        df_phot = pd.read_csv(PATH+'redshift_catalogs.full/zcat_'+field+'_v2.0.cat', names=['file','ID','RA','DEC','z_best',
-                    'z_best_type','z_spec','z_spec_ref','z_grism','mFDa4_z_peak','mFDa4_z_weight','mFDa4_z683_low',
-                    'mFDa4_z683_high','mFDa4_z954_low','mFDa4_z954_high','HB4_z_peak','HB4_z_weight','HB4_z683_low',
-                    'HB4_z683_high','HB4_z954_low','HB4_z954_high','Finkelstein_z_peak','Finkelstein_z_weight',
-                    'Finkelstein_z683_low','Finkelstein_z683_high','Finkelstein_z954_low','Finkelstein_z954_high',
-                    'Fontana_z_peak','Fontana_z_weight','Fontana_z683_low','Fontana_z683_high','Fontana_z954_low',
-                    'Fontana_z954_high','Pforr_z_peak','Pforr_z_weight','Pforr_z683_low','Pforr_z683_high',
-                    'Pforr_z954_low','Pforr_z954_high','Salvato_z_peak','Salvato_z_weight','Salvato_z683_low',
-                    'Salvato_z683_high','Salvato_z954_low','Salvato_z954_high','Wiklind_z_peak','Wiklind_z_weight',
-                    'Wiklind_z683_low','Wiklind_z683_high','Wiklind_z954_low','Wiklind_z954_high','Wuyts_z_peak',
-                    'Wuyts_z_weight','Wuyts_z683_low','Wuyts_z683_high','Wuyts_z954_low','Wuyts_z954_high'],
-                       delimiter=' ', comment='#')
-        # match based on ID as GDN has ID weirdness
-        df_phot = df_phot.loc[ (df_phot['ID'].isin(df['ID']) == True) ]
-        df_phot = df_phot.reset_index(drop=True)
-        df['ZPHOT_PEAK'] = df_phot['mFDa4_z_peak'] # might want to use weight for consistency with COSMOS
-        df['SIG_DIFF'] = df_phot['mFDa4_z683_high'] - df_phot['mFDa4_z683_low']
-        df = df[ (df['CLASS_STAR'] < 0.9) & (df['PHOTFLAG'] == 0) & (df['MASS'] > (mass_lo-1)) & (df['SIG_DIFF'] < sigma_cut) &
-               (df['HMAG'] < hmag_cut) ]
-        df = df.reset_index(drop=True)
+        df = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/CANDELS_COSMOS_CATS/'+field+'_data.csv',
+                        dtype={'ZSPEC_R':object})
+        df = df[ (df['CLASS_STAR'] < 0.9) & (df['PHOTFLAG'] == 0) & (df['MASS'] > (mass_lo-1)) & 
+            (df['SIG_DIFF'] < sigma_cut) ]
+    df = df.reset_index(drop=True)
 
         
     # ### ~~~ TEST RUN ~~~ ###
@@ -120,24 +99,27 @@ def process_samples(field):
 
 def determine_pairs(df, field):
     print('beginning determine_pairs() for ', field)
-    # get preliminary list of pairs and isolated galaxies
+    
+    # first thing is change df based on z_type
+    df['z'] = df['ZPHOT_PEAK']
+    if z_type == 'ps':
+        df.loc[ df['ZBEST_TYPE'] == 's', 'z' ] = df['ZSPEC']
+        df.loc[ df['ZBEST_TYPE'] == 's', 'SIG_DIFF' ] = 0
+    
     # make definite redshift cut:
-    all_df = df[ (df['ZPHOT_PEAK'] >= 0.45) & (df['ZPHOT_PEAK'] <= 3.05) ]  ### ~~~ I CHANGED THIS ~~~ ###
+    all_df = df.loc[ (df['z'] >= 0.45) & (df['z'] <= 3.05) ]  ### ~~~ I CHANGED THIS ~~~ ###
     print(field, len(all_df))
     all_df = all_df.reset_index(drop=True)
     
     # calculate LX
-    all_df['LX'] = ( all_df['FX'] * 4 * np.pi * ((cosmo.luminosity_distance(all_df['ZPHOT_PEAK']).to(u.cm))**2) * 
-                                                                ((1+all_df['ZPHOT_PEAK'])**(gamma-2)) )
+    all_df['LX'] = ( all_df['FX'] * 4 * np.pi * ((cosmo.luminosity_distance(all_df['z']).to(u.cm))**2) * 
+                                                                ((1+all_df['z'])**(gamma-2)) )
    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
     
     # Flag IR AGN based on Donley and Stern
     # look at IR luminosities
     all_df['IR_AGN_DON'] = [0]*len(all_df)
     all_df['IR_AGN_STR'] = [0]*len(all_df)
-    if field == 'GDN':
-        all_df = all_df.rename(columns={'IRAC_CH1_SCANDELS_FLUX':'IRAC_CH1_FLUX', 'IRAC_CH1_SCANDELS_FLUXERR':'IRAC_CH1_FLUXERR',
-                                        'IRAC_CH2_SCANDELS_FLUX':'IRAC_CH2_FLUX', 'IRAC_CH2_SCANDELS_FLUXERR':'IRAC_CH2_FLUXERR'})
 
     all_df.loc[ (np.log10(all_df['IRAC_CH3_FLUX']/all_df['IRAC_CH1_FLUX']) >= 0.08) &
                (np.log10(all_df['IRAC_CH4_FLUX']/all_df['IRAC_CH2_FLUX']) >= 0.15) &
@@ -167,17 +149,6 @@ def determine_pairs(df, field):
               ['IR_AGN_DON', 'IR_AGN_STR'] ] = 0
     
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
-    
-    ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
-    if field == 'GDS':
-        all_df['DALE_AGN_FLAG'] = all_df['AGN_FLAG']
-    elif field == 'COSMOS':
-        all_df['DALE_AGN_FLAG'] = [0]*len(all_df)
-    elif field == 'GDN':
-        all_df['DALE_AGN_FLAG'] = all_df['X_RAY_FLAG']
-    else:
-        all_df['DALE_AGN_FLAG'] = all_df['AGNFLAG']
-    ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
     
     # match catalogs:
     df_pos = SkyCoord(all_df['RA'],all_df['DEC'],unit='deg')
@@ -211,7 +182,7 @@ def determine_pairs(df, field):
     pair_df = pair_df[ (pair_df['mass_ratio'] <= 1) ] 
     
     # calculate projected separation at z
-    pair_df['kpc_sep'] = (pair_df['arc_sep']) / cosmo.arcsec_per_kpc_proper(all_df.loc[pair_df['prime_index'], 'ZPHOT_PEAK'])
+    pair_df['kpc_sep'] = (pair_df['arc_sep']) / cosmo.arcsec_per_kpc_proper(all_df.loc[pair_df['prime_index'], 'z'])
     
     # get complete list of projected pairs -> no need to calculate dv in this method
     true_pairs = pair_df[ (pair_df['kpc_sep'] <= max_sep*u.kpc) ]
@@ -239,8 +210,11 @@ def determine_pairs(df, field):
     # print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
                          
     # # calculate pair fraction for each projected pair:
-    pair_probs, pair_PdA = load_pdfs(all_df.loc[ true_pairs['prime_index'], 'ID'], all_df.loc[ true_pairs['partner_index'], 'ID'], 
-                           true_pairs['arc_sep'], field)
+    pair_probs, pair_PdA = load_pdfs(all_df.loc[ true_pairs['prime_index'], 'ID'], all_df.loc[ true_pairs['partner_index'], 'ID'],
+                                     all_df.loc[ true_pairs['prime_index'], 'z'], all_df.loc[ true_pairs['partner_index'], 'z'],
+                                    all_df.loc[ true_pairs['prime_index'], 'ZBEST_TYPE'], 
+                                     all_df.loc[ true_pairs['partner_index'], 'ZBEST_TYPE'],
+                                     true_pairs['arc_sep'], field)
     
     # ### ~~~ save input data for the model then end the program ~~~ ###
     # load_pdfs(all_df.loc[ true_pairs['prime_index'], 'ID'], all_df.loc[ true_pairs['partner_index'], 'ID'], 
@@ -297,17 +271,19 @@ def determine_pairs(df, field):
     # pick out control galaxies
     iso_idx = all_iso
     iso_mass = all_df.loc[all_iso, 'MASS']
-    iso_z = all_df.loc[all_iso, 'ZPHOT_PEAK']
+    iso_z = all_df.loc[all_iso, 'z']
     iso_sig = all_df.loc[all_iso, 'SIG_DIFF']
     pair_idx = np.concatenate( (gtrue_pairs['prime_index'], gtrue_pairs['partner_index']) )
     pair_mass = np.concatenate( (all_df.loc[ gtrue_pairs['prime_index'], 'MASS' ], all_df.loc[ gtrue_pairs['partner_index'], 'MASS' ]) )
-    pair_z = np.concatenate( (all_df.loc[ gtrue_pairs['prime_index'], 'ZPHOT_PEAK' ], all_df.loc[ gtrue_pairs['partner_index'], 'ZPHOT_PEAK' ]) )
+    pair_z = np.concatenate( (all_df.loc[ gtrue_pairs['prime_index'], 'z' ], all_df.loc[ gtrue_pairs['partner_index'], 'z' ]) )
     pair_sig = np.concatenate( (all_df.loc[ gtrue_pairs['prime_index'], 'SIG_DIFF' ], all_df.loc[ gtrue_pairs['partner_index'], 'SIG_DIFF' ]) )
     
     gtrue_pairs['prime_ID'] = np.array(all_df.loc[ gtrue_pairs['prime_index'], 'ID' ])
     gtrue_pairs['partner_ID'] = np.array(all_df.loc[ gtrue_pairs['partner_index'], 'ID' ])
-    gtrue_pairs['prime_z'] = np.array(all_df.loc[ gtrue_pairs['prime_index'], 'ZPHOT_PEAK' ])
-    gtrue_pairs['partner_z'] = np.array(all_df.loc[ gtrue_pairs['partner_index'], 'ZPHOT_PEAK' ])
+    gtrue_pairs['prime_z'] = np.array(all_df.loc[ gtrue_pairs['prime_index'], 'z' ])       ### ~~~ append redshift type ~~~ ###
+    gtrue_pairs['prime_zt'] = np.array(all_df.loc[ gtrue_pairs['prime_index'], 'ZBEST_TYPE' ])
+    gtrue_pairs['partner_z'] = np.array(all_df.loc[ gtrue_pairs['partner_index'], 'z' ])
+    gtrue_pairs['partner_zt'] = np.array(all_df.loc[ gtrue_pairs['partner_index'], 'ZBEST_TYPE' ])
     gtrue_pairs['prime_M'] = np.array(all_df.loc[ gtrue_pairs['prime_index'], 'MASS' ])
     gtrue_pairs['partner_M'] = np.array(all_df.loc[ gtrue_pairs['partner_index'], 'MASS' ])
     gtrue_pairs['prime_LX'] = np.array(all_df.loc[ gtrue_pairs['prime_index'], 'LX' ])
@@ -359,7 +335,7 @@ def determine_pairs(df, field):
     gtrue_pairs['c1prime_ID'] = [-99]*len(gtrue_pairs)
     gtrue_pairs.loc[ gtrue_pairs['i1prime_idx'] != -99, 'c1prime_ID' ] = np.array(all_df.loc[ c1prime_no99, 'ID' ])    
     gtrue_pairs['c1prime_z'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i1prime_idx'] != -99, 'c1prime_z' ] = np.array(all_df.loc[ c1prime_no99, 'ZPHOT_PEAK' ])
+    gtrue_pairs.loc[ gtrue_pairs['i1prime_idx'] != -99, 'c1prime_z' ] = np.array(all_df.loc[ c1prime_no99, 'z' ])
     gtrue_pairs['c1prime_M'] = [-99]*len(gtrue_pairs)
     gtrue_pairs.loc[ gtrue_pairs['i1prime_idx'] != -99, 'c1prime_M' ] = np.array(all_df.loc[ c1prime_no99, 'MASS' ])
     gtrue_pairs['c1prime_sig'] = [-99]*len(gtrue_pairs)
@@ -374,7 +350,7 @@ def determine_pairs(df, field):
     gtrue_pairs['c2prime_ID'] = [-99]*len(gtrue_pairs)
     gtrue_pairs.loc[ gtrue_pairs['i2prime_idx'] != -99, 'c2prime_ID' ] = np.array(all_df.loc[ c2prime_no99, 'ID' ])
     gtrue_pairs['c2prime_z'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i2prime_idx'] != -99, 'c2prime_z' ] = np.array(all_df.loc[c2prime_no99, 'ZPHOT_PEAK' ])
+    gtrue_pairs.loc[ gtrue_pairs['i2prime_idx'] != -99, 'c2prime_z' ] = np.array(all_df.loc[c2prime_no99, 'z' ])
     gtrue_pairs['c2prime_M'] = [-99]*len(gtrue_pairs)
     gtrue_pairs.loc[ gtrue_pairs['i2prime_idx'] != -99, 'c2prime_M' ] = np.array(all_df.loc[ c2prime_no99, 'MASS' ])
     gtrue_pairs['c2prime_sig'] = [-99]*len(gtrue_pairs)
@@ -389,7 +365,7 @@ def determine_pairs(df, field):
     gtrue_pairs['c1partner_ID'] = [-99]*len(gtrue_pairs)
     gtrue_pairs.loc[ gtrue_pairs['i1partner_idx'] != -99, 'c1partner_ID' ] = np.array(all_df.loc[ c1partner_no99, 'ID' ])
     gtrue_pairs['c1partner_z'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i1partner_idx'] != -99, 'c1partner_z' ] = np.array(all_df.loc[ c1partner_no99, 'ZPHOT_PEAK' ])
+    gtrue_pairs.loc[ gtrue_pairs['i1partner_idx'] != -99, 'c1partner_z' ] = np.array(all_df.loc[ c1partner_no99, 'z' ])
     gtrue_pairs['c1partner_M'] = [-99]*len(gtrue_pairs)
     gtrue_pairs.loc[ gtrue_pairs['i1partner_idx'] != -99, 'c1partner_M' ] = np.array(all_df.loc[ c1partner_no99, 'MASS' ])
     gtrue_pairs['c1partner_sig'] = [-99]*len(gtrue_pairs)
@@ -404,7 +380,7 @@ def determine_pairs(df, field):
     gtrue_pairs['c2partner_ID'] = [-99]*len(gtrue_pairs)
     gtrue_pairs.loc[ gtrue_pairs['i2partner_idx'] != -99, 'c2partner_ID' ] = np.array(all_df.loc[ c2partner_no99, 'ID' ])
     gtrue_pairs['c2partner_z'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i2partner_idx'] != -99, 'c2partner_z' ] = np.array(all_df.loc[ c2partner_no99, 'ZPHOT_PEAK' ])
+    gtrue_pairs.loc[ gtrue_pairs['i2partner_idx'] != -99, 'c2partner_z' ] = np.array(all_df.loc[ c2partner_no99, 'z' ])
     gtrue_pairs['c2partner_M'] = [-99]*len(gtrue_pairs)
     gtrue_pairs.loc[ gtrue_pairs['i2partner_idx'] != -99, 'c2partner_M' ] = np.array(all_df.loc[ c2partner_no99, 'MASS' ])
     gtrue_pairs['c2partner_sig'] = [-99]*len(gtrue_pairs)
@@ -424,21 +400,6 @@ def determine_pairs(df, field):
     gtrue_pairs['c1partner_flag'] = partner_flags[:,0]
     gtrue_pairs['c2partner_flag'] = partner_flags[:,1]
     
-    ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
-    
-    gtrue_pairs['prime_DALE_AGN_FLAG'] = np.array(all_df.loc[ gtrue_pairs['prime_index'], 'DALE_AGN_FLAG' ])
-    gtrue_pairs['partner_DALE_AGN_FLAG'] = np.array(all_df.loc[ gtrue_pairs['partner_index'], 'DALE_AGN_FLAG' ])
-    
-    gtrue_pairs['c1prime_DALE_AGN_FLAG'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i1prime_idx'] != -99, 'c1prime_DALE_AGN_FLAG' ] = np.array(all_df.loc[ c1prime_no99, 'DALE_AGN_FLAG' ])   
-    gtrue_pairs['c2prime_DALE_AGN_FLAG'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i2prime_idx'] != -99, 'c2prime_DALE_AGN_FLAG' ] = np.array(all_df.loc[ c2prime_no99, 'DALE_AGN_FLAG' ])  
-    gtrue_pairs['c1partner_DALE_AGN_FLAG'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i1partner_idx'] != -99, 'c1partner_DALE_AGN_FLAG' ] = np.array(all_df.loc[ c1partner_no99, 'DALE_AGN_FLAG' ])   
-    gtrue_pairs['c2partner_DALE_AGN_FLAG'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i2partner_idx'] != -99, 'c2partner_DALE_AGN_FLAG' ] = np.array(all_df.loc[ c2partner_no99, 'DALE_AGN_FLAG' ])  
-    
-    ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
     
     gtrue_pairs.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/conv_prob/conv_output/'+field+'_8.09.csv', index=False)
         
@@ -448,7 +409,7 @@ def determine_pairs(df, field):
     
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 
-def load_pdfs(gal1, gal2, theta, field):
+def load_pdfs(gal1, gal2, z1, z2, zt1, zt2, theta, field):
     print('beginning conv_prob() for ', field)
     
     all_prob = []
@@ -456,7 +417,7 @@ def load_pdfs(gal1, gal2, theta, field):
     
     print(field, len(gal1))
     
-    dA = np.linspace(0, 150, num=1501)
+    dA = np.linspace(0, 200, num=2001)
     # define array sizes to save distributions as
     PdA_2sav = np.zeros((len(gal1), len(dA)+2)) # so I can add the IDs and field as a check
     Pzz_2sav = np.zeros((len(gal1), 1001)) # length of z array
@@ -469,91 +430,50 @@ def load_pdfs(gal1, gal2, theta, field):
         COSMOS_PZ_arrf = COSMOS_PZ_arr.byteswap().newbyteorder()
         COSMOS_PZ = pd.DataFrame(COSMOS_PZ_arrf)
         z = COSMOS_PZ.loc[0,1:].to_numpy()
-        COSMOS_PZ = COSMOS_PZ.T
+        PDF_array = COSMOS_PZ.T
+    else:
+        with fits.open(PATH+'CANDELS_PDFs/'+field+'_mFDa4.fits') as data:
+            CANDELS_PZ = pd.DataFrame(data[0].data)
+        z = CANDELS_PZ.loc[0,1:].to_numpy()
+        PDF_array = CANDELS_PZ.T
     
-    for i, (ID1, ID2, th) in tqdm(enumerate(zip(gal1, gal2, theta)), miniters=100): 
-        # load PDFs based on string ID
-        ID1_str = str(ID1)
-        if len(ID1_str) == 1: id_string1 = '0000'+ID1_str
-        if len(ID1_str) == 2: id_string1 = '000'+ID1_str
-        if len(ID1_str) == 3: id_string1 = '00'+ID1_str
-        if len(ID1_str) == 4: id_string1 = '0'+ID1_str
-        if len(ID1_str) == 5: id_string1 = ID1_str
-        ID2_str = str(ID2)
-        if len(ID2_str) == 1: id_string2 = '0000'+ID2_str
-        if len(ID2_str) == 2: id_string2 = '000'+ID2_str
-        if len(ID2_str) == 3: id_string2 = '00'+ID2_str
-        if len(ID2_str) == 4: id_string2 = '0'+ID2_str
-        if len(ID2_str) == 5: id_string2 = ID2_str        ### PUT ALL THESE PDF FILES INTO ONE FITS FILE => FASTER ###
+    for i, (ID1, ID2, ID1_z, ID2_z, ID1_zt, ID2_zt, th) in tqdm(enumerate(zip(gal1, gal2, z1, z2, zt1, zt2, theta)), miniters=100): 
+
+        if z_type != 'p':
+            # if we are working with zspecs, we need to interpolate to a finer grid:
+            z_fine = np.linspace(0,10,10001).round(3)
+            z = z_fine
+            if ID1_zt == 's':
+                zspec1 = round(ID1_z, 3)
+                PDF1 = np.zeros(z_fine.shape)
+                PDF1[np.where(z_fine == zspec1)] = 1
+                PDF1 = PDF1 / np.trapz(PDF1, x=z_fine) # normalize
+            elif ID1_zt == 'p':
+                # interpolate
+                PDF1_01 = np.array(PDF_array.loc[ 1:, ID1 ])
+                fintp1 = interp1d(z, PDF1_01, kind='linear')
+                PDF1 = fintp1(z_fine)
+                PDF1 = PDF1 / np.trapz(PDF1, x=z_fine)
+            if ID2_zt == 's':
+                zspec2 = round(ID2_z, 3)
+                PDF2 = np.zeros(z_fine.shape)
+                PDF2[np.where(z_fine == zspec2)] = 1
+                PDF2 = PDF2 / np.trapz(PDF2, x=z_fine) # normalize
+            elif ID2_zt == 'p':
+                # interpolate
+                PDF2_01 = np.array(PDF_array.loc[ 1:, ID2 ])
+                fintp2 = interp1d(z, PDF2_01, kind='linear')
+                PDF2 = fintp2(z_fine)
+                PDF2 = PDF2 / np.trapz(PDF2, x=z_fine)
+
+        else:
         
-        if field == "GDS":
-            pdf_filename1 = '/nobackup/c1029594/CANDELS_AGN_merger_data/Data - All Fields/GOODSS_OPTIMIZED03/ALL_OPTIMIZED_PDFS_GOODSS_ID'+id_string1+'.pzd'
-            pdf_filename2 = '/nobackup/c1029594/CANDELS_AGN_merger_data/Data - All Fields/GOODSS_OPTIMIZED03/ALL_OPTIMIZED_PDFS_GOODSS_ID'+id_string2+'.pzd'
-            # read the PDFs
-            PDF1_load = pd.read_csv(pdf_filename1, comment='#', names=['z', 'Finkelstein', 'Fontana', 'Pforr', 'Salvato', 'Wiklind',
-                                                      'Wuyts', 'HB4', 'mFDa4'], delimiter=' ')
-            PDF2_load = pd.read_csv(pdf_filename2, comment='#', names=['z', 'Finkelstein', 'Fontana', 'Pforr', 'Salvato', 'Wiklind',
-                                                      'Wuyts', 'HB4', 'mFDa4'], delimiter=' ')
-            PDF1 = np.array(PDF1_load['mFDa4'])
-            PDF2 = np.array(PDF2_load['mFDa4'])
-            z = np.array(PDF1_load['z'])
-            
-        elif field == "EGS":
-            pdf_filename1 = '/nobackup/c1029594/CANDELS_AGN_merger_data/Data - All Fields/EGS_OPTIMIZED03/ALL_OPTIMIZED_PDFS_EGS_ID'+id_string1+'.pzd'
-            pdf_filename2 = '/nobackup/c1029594/CANDELS_AGN_merger_data/Data - All Fields/EGS_OPTIMIZED03/ALL_OPTIMIZED_PDFS_EGS_ID'+id_string2+'.pzd'
-            # read the PDFs
-            PDF1_load = pd.read_csv(pdf_filename1, comment='#', names=['z', 'Finkelstein', 'Fontana', 'Pforr', 'Salvato', 'Wiklind',
-                                                      'Wuyts', 'HB4', 'mFDa4'], delimiter=' ')
-            PDF2_load = pd.read_csv(pdf_filename2, comment='#', names=['z', 'Finkelstein', 'Fontana', 'Pforr', 'Salvato', 'Wiklind',
-                                                      'Wuyts', 'HB4', 'mFDa4'], delimiter=' ')
-            PDF1 = np.array(PDF1_load['mFDa4'])
-            PDF2 = np.array(PDF2_load['mFDa4'])
-            z = np.array(PDF1_load['z'])
-            
-        elif field == "GDN":
-            pdf_filename1 = '/nobackup/c1029594/CANDELS_AGN_merger_data/Data - All Fields/GOODSN_OPTIMIZED03/ALL_OPTIMIZED_PDFS_GOODSN_ID'+id_string1+'.pzd'
-            pdf_filename2 = '/nobackup/c1029594/CANDELS_AGN_merger_data/Data - All Fields/GOODSN_OPTIMIZED03/ALL_OPTIMIZED_PDFS_GOODSN_ID'+id_string2+'.pzd'
-            # read the PDFs
-            PDF1_load = pd.read_csv(pdf_filename1, comment='#', names=['z', 'Finkelstein', 'Fontana', 'Pforr', 'Salvato', 'Wiklind',
-                                                      'Wuyts', 'HB4', 'mFDa4'], delimiter=' ')
-            PDF2_load = pd.read_csv(pdf_filename2, comment='#', names=['z', 'Finkelstein', 'Fontana', 'Pforr', 'Salvato', 'Wiklind',
-                                                      'Wuyts', 'HB4', 'mFDa4'], delimiter=' ')
-            PDF1 = np.array(PDF1_load['mFDa4'])
-            PDF2 = np.array(PDF2_load['mFDa4'])
-            z = np.array(PDF1_load['z'])
-            
-        elif field == "COS":
-            pdf_filename1 = '/nobackup/c1029594/CANDELS_AGN_merger_data/Data - All Fields/COSMOS_OPTIMIZED03/ALL_OPTIMIZED_PDFS_COSMOS_ID'+id_string1+'.pzd'
-            pdf_filename2 = '/nobackup/c1029594/CANDELS_AGN_merger_data/Data - All Fields/COSMOS_OPTIMIZED03/ALL_OPTIMIZED_PDFS_COSMOS_ID'+id_string2+'.pzd'
-            # read the PDFs
-            PDF1_load = pd.read_csv(pdf_filename1, comment='#', names=['z', 'Finkelstein', 'Fontana', 'Pforr', 'Salvato', 'Wiklind',
-                                                      'Wuyts', 'HB4', 'mFDa4'], delimiter=' ')
-            PDF2_load = pd.read_csv(pdf_filename2, comment='#', names=['z', 'Finkelstein', 'Fontana', 'Pforr', 'Salvato', 'Wiklind',
-                                                      'Wuyts', 'HB4', 'mFDa4'], delimiter=' ')
-            PDF1 = np.array(PDF1_load['mFDa4'])
-            PDF2 = np.array(PDF2_load['mFDa4'])
-            z = np.array(PDF1_load['z'])
-            
-        elif field == "UDS":
-            pdf_filename1 = '/nobackup/c1029594/CANDELS_AGN_merger_data/Data - All Fields/UDS_OPTIMIZED03/ALL_OPTIMIZED_PDFS_UDS_ID'+id_string1+'.pzd' 
-            pdf_filename2 = '/nobackup/c1029594/CANDELS_AGN_merger_data/Data - All Fields/UDS_OPTIMIZED03/ALL_OPTIMIZED_PDFS_UDS_ID'+id_string2+'.pzd' 
-            # read the PDFs
-            PDF1_load = pd.read_csv(pdf_filename1, comment='#', names=['z', 'Finkelstein', 'Fontana', 'Pforr', 'Salvato', 'Wiklind',
-                                                      'Wuyts', 'HB4', 'mFDa4'], delimiter=' ')
-            PDF2_load = pd.read_csv(pdf_filename2, comment='#', names=['z', 'Finkelstein', 'Fontana', 'Pforr', 'Salvato', 'Wiklind',
-                                                      'Wuyts', 'HB4', 'mFDa4'], delimiter=' ')
-            PDF1 = np.array(PDF1_load['mFDa4'])
-            PDF2 = np.array(PDF2_load['mFDa4'])
-            z = np.array(PDF1_load['z'])
-            
-        elif field == 'COSMOS':
-            PDF1 = np.array(COSMOS_PZ.loc[ 1:, ID1 ])
-            PDF2 = np.array(COSMOS_PZ.loc[ 1:, ID2 ])
+            PDF1 = np.array(PDF_array.loc[ 1:, ID1 ])
+            PDF2 = np.array(PDF_array.loc[ 1:, ID2 ])
         
         Cv_prob = Convdif(z, PDF1, PDF2, dv_lim=max_dv)
+        PdA, comb_PDF = PdA_prob(PDF1, PDF2, ID1_zt, ID2_zt, th, z, dA)
         
-        # should do the angular diameter distance here and integrate for each bin in post
-        PdA, comb_PDF = PdA_prob(PDF1, PDF2, th, z, dA)
         
         all_prob.append(Cv_prob)
         # all_PdA.append(PdA)
@@ -620,19 +540,17 @@ def Convdif(z_all, Pz1, Pz2, dv_lim=1000):
 
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 
-def PdA_prob(PDF1, PDF2, theta, z, dA):
+def PdA_prob(PDF1, PDF2, zt1, zt2, theta, z, dA):
     
     comb_PDF = PDF1*PDF2
-    comb_PDF = comb_PDF / np.trapz(comb_PDF, x=z)
+    ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+    if zt1 == 's' and zt2 == 's': # add if both z_types = 'spec' or something to avoid zero issues
+        middle_z = np.mean( (z[np.argmax(PDF1)], z[np.argmax(PDF2)]) )
+        # then make the corresponding comb_PDF value = 1
+        comb_PDF[ np.argmin(np.abs(z-middle_z)) ] = 1  
+    ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+    comb_PDF = comb_PDF / np.trapz(comb_PDF, x=z) # and normalize
     
-    # # attempt change of variable
-    # dA = ( ang_diam_dist(z, theta) )
-    # dAdz = np.gradient(dA,z)
-    # dzdA_test = dAdz**(-1)
-
-    # # will need to split into two monochromatic parts of dA:
-    # split_z = z[np.where(dA==np.max(dA))]
-
     # so split 0-1.61 (1) and 1.62-10 (2)
     dA1 = ang_diam_dist( z[np.where(z <= 1.61)], theta )
     dA2 = ang_diam_dist( z[np.where(z > 1.61)], theta )
@@ -642,8 +560,15 @@ def PdA_prob(PDF1, PDF2, theta, z, dA):
     comb_PDF2 = comb_PDF[np.where(z > 1.61)] 
 
     PdA11 = comb_PDF1 * np.abs(dzdA(dA1, z1, theta))
-    PdA11 = np.nan_to_num(PdA11) # fill the nan casued by divisiom ny zero
+    PdA11 = np.nan_to_num(PdA11) # fill the nan casued by division ny zero
     PdA12 = comb_PDF2 * np.abs(dzdA(dA2, z2, theta))
+    
+    ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+    # concatenate 1 and 2 just to find the max
+    dA_comb = np.concatenate((dA1, dA2))
+    PdA_comb = np.concatenate((PdA11, PdA12))
+    max_dA = dA_comb[np.argmax(PdA_comb)]
+    ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 
     dA_new = dA
     fintp1 = interp1d(dA1, PdA11, kind='linear', bounds_error=False, fill_value=0)
@@ -653,6 +578,12 @@ def PdA_prob(PDF1, PDF2, theta, z, dA):
     intr_PdA2 = fintp2(dA_new)
 
     PdA = intr_PdA1+intr_PdA2
+    
+    ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+    if zt1 == 's' or zt2 == 's': # should only happen when there is a spec z
+        # find the element in dA_new that is closest to max_dA
+        PdA[ np.argmin(np.abs(dA_new-max_dA)) ] = np.max(PdA_comb)  
+    ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
     
     PdA = PdA / np.trapz(PdA, x=dA_new)
     
