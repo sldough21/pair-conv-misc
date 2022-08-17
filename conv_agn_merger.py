@@ -49,7 +49,8 @@ hmag_cut = 100 # essentially no cut <- not important
 select_controls = False
 duplicate_pairs = False
 apple_bob = True
-save = True
+save = False
+t_run = False
 z_type = 'ps' # ['p', 'ps' ,'s']
 date = '8.17' ### can automate this you know ###
 num_proc = 20
@@ -62,7 +63,7 @@ def main():
     print('beginning main()')
     
     # we want to parallelize the data by fields, so:
-    all_fields = ['GDS','EGS','COS','GDN','UDS','COSMOS'] # COS is for CANDELS COSMOS
+    all_fields = ['GDS']#,'EGS','COS','GDN','UDS','COSMOS'] # COS is for CANDELS COSMOS
     # all_fields = ['GDN']
     # all_fields = ['COSMOS']
     # process_samples('COSMOS')
@@ -97,7 +98,8 @@ def process_samples(field):
 
         
     # ### ~~~ TEST RUN ~~~ ###
-    # df = df.iloc[:1000]        
+    if t_run == True:
+        df = df.iloc[:500]        
     
     # there is no data draw in this method, go straight to getting projected pairs based on prime
     determine_pairs(df, field)
@@ -338,117 +340,13 @@ def determine_pairs(df, field):
     ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
     
     
-    # let's experiment with The Sean Approach
+    # let's experiment with The Bobbing Approach
     # write a function for it
     if apple_bob == True:
         gtrue_pairs['prime_RA'] = np.array(all_df.loc[gtrue_pairs['prime_index'], 'RA'])
         gtrue_pairs['prime_DEC'] = np.array(all_df.loc[gtrue_pairs['prime_index'], 'DEC']) # <== only relevant for apple bobbing
         conv_apples(gtrue_pairs, all_df)
-    
-    
-    if select_controls == True: ### DONT FORGET ABOUT SHUFFLING LATER ON
-        controls, c_flag = get_control(iso_idx, iso_mass, iso_z, iso_sig, pair_idx, pair_mass, pair_z, pair_sig)
-        # let's output the matched fraction based on c_flag
-        c_flag_all = np.concatenate(c_flag)
-        tp = len(c_flag_all)
-        tm = len(c_flag_all[ np.where(c_flag_all == 0) ])
-        tr = len(c_flag_all[ np.where(c_flag_all == 1) ])
-        tf = len(c_flag_all[ np.where(c_flag_all == 2) ])
-        print('UNIQUE MATCH FRACTION IN {} = {}'.format(field, tm/tp))
-        print('RECYCLED FRACTION IN {} = {}'.format(field, tr/tp))
-        print('MATCH FRACTION WITH RECYCLING IN {} = {}'.format(field, (tm+tr)/tp)) 
-        print('FAIL FRACTION IN {} = {}'.format(field, tf/tp)) 
-    else:
-        controls = np.full((len(pair_idx), 2), -99)
-        c_flag = np.full((len(pair_idx), 2), -99)
-    
-    print('made it here ', field)
-    
-    middle_idx = len(controls)//2
-    prime_controls = controls[:middle_idx]
-    # get a c1prime list without -99
-    c1prime_no99 = prime_controls[:,0][np.where(prime_controls[:,0] != -99)]
-    c2prime_no99 = prime_controls[:,1][np.where(prime_controls[:,1] != -99)]
-    prime_flags = c_flag[:middle_idx]
-    
-    partner_controls = controls[middle_idx:]
-    c1partner_no99 = partner_controls[:,0][np.where(partner_controls[:,0] != -99)]
-    c2partner_no99 = partner_controls[:,1][np.where(partner_controls[:,1] != -99)]
-    partner_flags = c_flag[middle_idx:]
-    
-    # add pair data to the dataframe: (all empty values are -99)
-    gtrue_pairs['i1prime_idx'] = prime_controls[:,0]
-    gtrue_pairs['i2prime_idx'] = prime_controls[:,1]
-    gtrue_pairs['i1partner_idx'] = partner_controls[:,0]
-    gtrue_pairs['i2partner_idx'] = partner_controls[:,1]
         
-    gtrue_pairs['c1prime_ID'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i1prime_idx'] != -99, 'c1prime_ID' ] = np.array(all_df.loc[ c1prime_no99, 'ID' ])    
-    gtrue_pairs['c1prime_z'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i1prime_idx'] != -99, 'c1prime_z' ] = np.array(all_df.loc[ c1prime_no99, 'z' ])
-    gtrue_pairs['c1prime_M'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i1prime_idx'] != -99, 'c1prime_M' ] = np.array(all_df.loc[ c1prime_no99, 'MASS' ])
-    gtrue_pairs['c1prime_sig'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i1prime_idx'] != -99, 'c1prime_sig' ] = np.array(all_df.loc[ c1prime_no99, 'SIG_DIFF' ])
-    gtrue_pairs['c1prime_LX'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i1prime_idx'] != -99, 'c1prime_LX' ] = np.array(all_df.loc[ c1prime_no99, 'LX' ])
-    gtrue_pairs['c1prime_IR_AGN_DON'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i1prime_idx'] != -99, 'c1prime_IR_AGN_DON' ] = np.array(all_df.loc[ c1prime_no99, 'IR_AGN_DON' ]) 
-    gtrue_pairs['c1prime_IR_AGN_STR'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i1prime_idx'] != -99, 'c1prime_IR_AGN_STR' ] = np.array(all_df.loc[ c1prime_no99, 'IR_AGN_STR' ]) 
-    
-    gtrue_pairs['c2prime_ID'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i2prime_idx'] != -99, 'c2prime_ID' ] = np.array(all_df.loc[ c2prime_no99, 'ID' ])
-    gtrue_pairs['c2prime_z'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i2prime_idx'] != -99, 'c2prime_z' ] = np.array(all_df.loc[c2prime_no99, 'z' ])
-    gtrue_pairs['c2prime_M'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i2prime_idx'] != -99, 'c2prime_M' ] = np.array(all_df.loc[ c2prime_no99, 'MASS' ])
-    gtrue_pairs['c2prime_sig'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i2prime_idx'] != -99, 'c2prime_sig' ] = np.array(all_df.loc[ c2prime_no99, 'SIG_DIFF' ])
-    gtrue_pairs['c2prime_LX'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i2prime_idx'] != -99, 'c2prime_LX' ] = np.array(all_df.loc[ c2prime_no99, 'LX' ])
-    gtrue_pairs['c2prime_IR_AGN_DON'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i2prime_idx'] != -99, 'c2prime_IR_AGN_DON' ] = np.array(all_df.loc[ c2prime_no99, 'IR_AGN_DON' ]) 
-    gtrue_pairs['c2prime_IR_AGN_STR'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i2prime_idx'] != -99, 'c2prime_IR_AGN_STR' ] = np.array(all_df.loc[ c2prime_no99, 'IR_AGN_STR' ]) 
-    
-    gtrue_pairs['c1partner_ID'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i1partner_idx'] != -99, 'c1partner_ID' ] = np.array(all_df.loc[ c1partner_no99, 'ID' ])
-    gtrue_pairs['c1partner_z'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i1partner_idx'] != -99, 'c1partner_z' ] = np.array(all_df.loc[ c1partner_no99, 'z' ])
-    gtrue_pairs['c1partner_M'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i1partner_idx'] != -99, 'c1partner_M' ] = np.array(all_df.loc[ c1partner_no99, 'MASS' ])
-    gtrue_pairs['c1partner_sig'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i1partner_idx'] != -99, 'c1partner_sig' ] = np.array(all_df.loc[ c1partner_no99, 'SIG_DIFF' ])
-    gtrue_pairs['c1partner_LX'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i1partner_idx'] != -99, 'c1partner_LX' ] = np.array(all_df.loc[ c1partner_no99, 'LX' ])
-    gtrue_pairs['c1partner_IR_AGN_DON'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i1partner_idx'] != -99, 'c1partner_IR_AGN_DON' ] = np.array(all_df.loc[ c1partner_no99, 'IR_AGN_DON' ]) 
-    gtrue_pairs['c1partner_IR_AGN_STR'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i1partner_idx'] != -99, 'c1partner_IR_AGN_STR' ] = np.array(all_df.loc[ c1partner_no99, 'IR_AGN_STR' ]) 
-    
-    gtrue_pairs['c2partner_ID'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i2partner_idx'] != -99, 'c2partner_ID' ] = np.array(all_df.loc[ c2partner_no99, 'ID' ])
-    gtrue_pairs['c2partner_z'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i2partner_idx'] != -99, 'c2partner_z' ] = np.array(all_df.loc[ c2partner_no99, 'z' ])
-    gtrue_pairs['c2partner_M'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i2partner_idx'] != -99, 'c2partner_M' ] = np.array(all_df.loc[ c2partner_no99, 'MASS' ])
-    gtrue_pairs['c2partner_sig'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i2partner_idx'] != -99, 'c2partner_sig' ] = np.array(all_df.loc[ c2partner_no99, 'SIG_DIFF' ])
-    gtrue_pairs['c2partner_LX'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i2partner_idx'] != -99, 'c2partner_LX' ] = np.array(all_df.loc[ c2partner_no99, 'LX' ])
-    gtrue_pairs['c2partner_IR_AGN_DON'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i2partner_idx'] != -99, 'c2partner_IR_AGN_DON' ] = np.array(all_df.loc[ c2partner_no99, 'IR_AGN_DON' ]) 
-    gtrue_pairs['c2partner_IR_AGN_STR'] = [-99]*len(gtrue_pairs)
-    gtrue_pairs.loc[ gtrue_pairs['i2partner_idx'] != -99, 'c2partner_IR_AGN_STR' ] = np.array(all_df.loc[ c2partner_no99, 'IR_AGN_STR' ]) 
-    
-    # just tack on counts for total isolated galaxies:
-    # gtrue_pairs['iso_count'] = [len(all_iso)] * len(gtrue_pairs)
-    
-    gtrue_pairs['c1prime_flag'] = prime_flags[:,0]
-    gtrue_pairs['c2prime_flag'] = prime_flags[:,1]
-    gtrue_pairs['c1partner_flag'] = partner_flags[:,0]
-    gtrue_pairs['c2partner_flag'] = partner_flags[:,1]
     
     if save == True:
         gtrue_pairs.to_csv(conv_PATH+'conv_output/pair_ztype-'+z_type+'_'+field+'_'+date+'.csv', index=False)
@@ -581,7 +479,6 @@ def Convdif(z_all, Pz1, Pz2, dv_lim=1000):
     
     # convolve with the symmetrical interpolation values
     if len(fintp2(v_new).shape) == 1:
-        
         v_conv = signal.fftconvolve(fintp2(v_new), fintp1(v_new)[::-1], mode='full')
     else:
         v_conv = signal.fftconvolve(fintp2(v_new), fintp1(v_new)[:,::-1], mode='full', axes=1) ### THE BUG IS HERE ###
@@ -694,7 +591,7 @@ def conv_apples(pair_df, iso_pool_df, base_dz=0.05, base_dM=0.05, dP=0.01, N_con
     # so for each pair, assemble a df from the iso pool for both it's prime and partner properties
     iso_pool_df = iso_pool_df.loc[ iso_pool_df['all_pp'] <= min_pp ].reset_index(drop=True)
     
-    field = pair_df['field'].unique()[0]
+    field = pair_df['field'].unique()[0]    ### DOESN'T WORK FOR SPEC Z'S BC I NEED TO INTERPOLATE REMEMBER ###
     if field == 'COSMOS':
         base_dz = 0.02
         base_dM = 0.02
@@ -730,7 +627,51 @@ def conv_apples(pair_df, iso_pool_df, base_dz=0.05, base_dM=0.05, dP=0.01, N_con
         CANDELS_PZ_arrf = CANDELS_PZ_arr.byteswap().newbyteorder()
         CANDELS_PZ = pd.DataFrame(CANDELS_PZ_arrf)
         z_01 = CANDELS_PZ.loc[0,1:].to_numpy()
-        PDF_array = np.array(CANDELS_PZ)
+        PDF_array = np.array(CANDELS_PZ) # my guess is that this is fine, as the 0th index is redshift and the others are PDFs
+        
+    # adjust the arrays with spectroscopic information before we jump into the loop
+    ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+    ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+    # essentially I need to remake the PDF_array (first row is redshifts but much longer #
+    if z_type != 'p':
+        # if we are working with zspecs, we need to interpolate to a finer grid:
+        z_fine = np.linspace(0,10,10001).round(3)
+        # we wanna do this column wise hmmmmm... recreate an appropriate sized array:
+        PDF_array_ps = np.zeros((len(PDF_array),len(z_fine)+1))
+        # add the fine redshift as the first row:
+        PDF_array_ps[0,1:] = z_fine
+        # add the IDs on the left hand side below:
+        PDF_array_ps[:,0] = PDF_array[:,0]
+        # fill the phot-zs first: need the IDs of zbest_type = 'p'
+        fintp1 = interp1d(z_01, PDF_array[np.array(iso_pool_df.loc[ iso_pool_df['ZBEST_TYPE'] == 'p', 'ID' ]),1:], kind='linear')
+        # actually do them all at once first...
+        PDF_array_ps[ np.array(iso_pool_df.loc[ iso_pool_df['ZBEST_TYPE'] == 'p', 'ID' ]), 1: ] = fintp1(z_fine)
+        # now for spec-zs
+        # find where in the PDF_array_ps the z-value is our spec-z value and fill then normalize:
+        spec_IDs = np.array(iso_pool_df.loc[ iso_pool_df['ZBEST_TYPE'] == 's', 'ID' ])
+        spec_zs = np.array(iso_pool_df.loc[ iso_pool_df['ZBEST_TYPE'] == 's', 'z' ]).round(3)
+        # get the spec-z's to the right values
+        y = spec_zs
+        x = PDF_array_ps[0,:]
+        xsorted = np.argsort(x)
+        ypos = np.searchsorted(x[xsorted], y)
+        indices = xsorted[ypos]
+        PDF_array_ps[spec_IDs, indices ] = 1
+        # now normalize
+        PDF_array_ps[spec_IDs,1:] = ( PDF_array_ps[spec_IDs,1:] / 
+                                     np.array([np.trapz(PDF_array_ps[spec_IDs,1:], x=z_fine)]*PDF_array_ps[:,1:].shape[1]).T )
+        z_01 = z_fine
+        PDF_array = PDF_array_ps
+        # peak = np.array(iso_pool_df.loc[ iso_pool_df['ZBEST_TYPE'] == 'p', 'z' ])[202]
+        # # plt.plot( z_fine, PDF_array_ps[spec_IDs[100],1:] )
+        # plt.plot( z_fine, PDF_array_ps[np.array(iso_pool_df.loc[ iso_pool_df['ZBEST_TYPE'] == 'p', 'ID' ])[202],1:] )
+        # plt.plot([peak,peak], [0,100], color='red', linestyle='--')
+        # plt.ylim(0,10)
+        # plt.show()
+        # sys.exit()
+            
+    ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+    ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
     
     controls = []
     
@@ -755,10 +696,10 @@ def conv_apples(pair_df, iso_pool_df, base_dz=0.05, base_dM=0.05, dP=0.01, N_con
             # somehow combine the iso1 and iso2 df into a M x N long df that has all possible combinations of them
             # useful to calculate conv_prob columns-wise
             apple_df = iso1.merge(iso2, how='cross').rename(columns={'ID_x':'ID1','ID_y':'ID2'})
-            if len(apple_df) == 0:
-                dz = dz + 0.03
-                dM = dM + 0.03
-                continue
+            # if len(apple_df) == 0:
+            #     dz = dz + 0.03
+            #     dM = dM + 0.03
+            #     continue
                 
             # create unique pair strings:
             apple_df['pair_str'] = (apple_df['ID1'].astype(int)).astype(str)+'+'+(apple_df['ID2'].astype(int)).astype(str)
@@ -777,17 +718,20 @@ def conv_apples(pair_df, iso_pool_df, base_dz=0.05, base_dM=0.05, dP=0.01, N_con
             yCOR = SkyCoord(apple_df['RA2'], apple_df['DEC2'], unit='deg')
             apple_df['arc_sep'] = xCOR.separation(yCOR).arcsecond
 
+            # if we are working with spec-z's, we gotta interpolate these...
             apple_df['Cp'] = Convdif(z_01, PDF_array[apple_df['ID1'],1:], PDF_array[apple_df['ID2'],1:], dv_lim=max_dv)
 
             if Pp > 0.01:
-                apple_df2 = apple_df.loc[ (np.abs(apple_df['Cp'] - Pp) < dP) & (apple_df['arc_sep'] > max_R_kpc) &
+                apple_df2 = apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.02) & 
+                                         (apple_df['arc_sep'] > max_R_kpc) &
                                          (apple_df['ID1'] != apple_df['ID2']) ].reset_index(drop=True)
-                apple_df.loc[ (np.abs(apple_df['Cp'] - Pp) < dP) & (apple_df['arc_sep'] > max_R_kpc) &
+                apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.02) & (apple_df['arc_sep'] > max_R_kpc) &
                                          (apple_df['ID1'] != apple_df['ID2']), 'reuse_flag' ] = 1
             else:                                                                          # probably too strict...
-                apple_df2 = apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.5) & (apple_df['arc_sep'] > max_R_kpc) &
+                apple_df2 = apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.1) & 
+                                         (apple_df['arc_sep'] > max_R_kpc) &
                                          (apple_df['ID1'] != apple_df['ID2']) ].reset_index(drop=True)
-                apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.5) & (apple_df['arc_sep'] > max_R_kpc) &
+                apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.05) & (apple_df['arc_sep'] > max_R_kpc) &
                                          (apple_df['ID1'] != apple_df['ID2']), 'reuse_flag' ] = 1
                 
             # add pair information:
@@ -802,7 +746,7 @@ def conv_apples(pair_df, iso_pool_df, base_dz=0.05, base_dM=0.05, dP=0.01, N_con
             # now sort on this
             apple_df2.sort_values(by=['dif'], inplace=True, ascending=True, ignore_index=True) # this resets the index
             
-            # print(field, ID1, M1, z1, ID2, M2, z2, Pp, np.max(apple_df['Cp']), len(apple_df), len(apple_df2))
+            print(field, ID1, M1, z1, ID2, M2, z2, Pp, np.max(apple_df['Cp']), len(apple_df), len(apple_df2))
         
             # take the top pair and add it to an array:
             if len(apple_df2) >= N_controls:   ### ~~~ POSSIBLE THE TWO CHOSEN PAIRS HAVE OVERLAPPING GALAXIES ~~~ ###
