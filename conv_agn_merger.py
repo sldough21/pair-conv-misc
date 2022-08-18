@@ -35,7 +35,7 @@ conv_PATH = '/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/conv_p
 cosmo = FlatLambdaCDM(H0=70 * u.km / u.s / u.Mpc, Tcmb0=2.725 * u.K, Om0=0.3) # 0.7 for omega
 # determine conservative ang separation correspondong to 150 kpc at z = 0.5
 R_kpc = cosmo.arcsec_per_kpc_proper(0.5) # arcsec/kpc at z=0.5
-max_R_kpc = 120*u.kpc * R_kpc # in arcseconds ### this is the bug right here
+max_R_kpc = 150*u.kpc * R_kpc # in arcseconds ### this is the bug right here
 
 mass_lo = 10 # lower mass limit of the more massive galaxy in a pair that we want to consider
 gamma = 1.4 # for k correction calculation
@@ -49,10 +49,10 @@ hmag_cut = 100 # essentially no cut <- not important
 select_controls = False
 duplicate_pairs = False
 apple_bob = True
-save = False
+save = True
 t_run = False
 z_type = 'ps' # ['p', 'ps' ,'s']
-date = '8.17' ### can automate this you know ###
+date = '8.18' ### can automate this you know ###
 num_proc = 20
 min_pp = 1.0
 
@@ -63,7 +63,7 @@ def main():
     print('beginning main()')
     
     # we want to parallelize the data by fields, so:
-    all_fields = ['GDS']#,'EGS','COS','GDN','UDS','COSMOS'] # COS is for CANDELS COSMOS
+    all_fields = ['GDS','EGS','COS','GDN','UDS']#,'COSMOS'] # COS is for CANDELS COSMOS
     # all_fields = ['GDN']
     # all_fields = ['COSMOS']
     # process_samples('COSMOS')
@@ -212,19 +212,19 @@ def determine_pairs(df, field):
     ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
     
     
-    # add galaxies that aren't pairs into the isolated sample:
-    iso_add = pair_df[ (pair_df['kpc_sep'] > max_sep) ]
+#     # add galaxies that aren't pairs into the isolated sample:
+#     iso_add = pair_df[ (pair_df['kpc_sep'] > max_sep) ]
 
-    # just stack prime and partner indices into massive array:
-    iso_add_idx = np.concatenate( (np.array(iso_add['prime_index']), np.array(iso_add['partner_index'])), axis=0)
-    # return unique indices
-    iso_add_uniq = np.unique(iso_add_idx)
-    # get rid of cases where those indices appear elsewhere, so create array for true pair indices
-    true_pair_idx = np.concatenate( (np.array(true_pairs['prime_index']), np.array(true_pairs['partner_index'])), axis=0)
-    # only keep the elements that aren't in true pair:
-    mask = np.isin(iso_add_uniq, true_pair_idx, invert=True)
-    iso_unq = iso_add_uniq[mask]
-    all_iso = np.concatenate( (iso_conf, iso_unq), axis=0)
+#     # just stack prime and partner indices into massive array:
+#     iso_add_idx = np.concatenate( (np.array(iso_add['prime_index']), np.array(iso_add['partner_index'])), axis=0)
+#     # return unique indices
+#     iso_add_uniq = np.unique(iso_add_idx)
+#     # get rid of cases where those indices appear elsewhere, so create array for true pair indices
+#     true_pair_idx = np.concatenate( (np.array(true_pairs['prime_index']), np.array(true_pairs['partner_index'])), axis=0)
+#     # only keep the elements that aren't in true pair:
+#     mask = np.isin(iso_add_uniq, true_pair_idx, invert=True)
+#     iso_unq = iso_add_uniq[mask]
+#     all_iso = np.concatenate( (iso_conf, iso_unq), axis=0)
     
     # print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
     # print('PDF width cut? ', sigma_cut)
@@ -232,11 +232,11 @@ def determine_pairs(df, field):
     # print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
                          
     # # calculate pair fraction for each projected pair:
-    pair_probs, pair_PdA = load_pdfs(all_df.loc[ true_pairs['prime_index'], 'ID'], all_df.loc[ true_pairs['partner_index'], 'ID'],
-                                     all_df.loc[ true_pairs['prime_index'], 'z'], all_df.loc[ true_pairs['partner_index'], 'z'],
-                                    all_df.loc[ true_pairs['prime_index'], 'ZBEST_TYPE'], 
-                                     all_df.loc[ true_pairs['partner_index'], 'ZBEST_TYPE'],
-                                     true_pairs['arc_sep'], field)
+    # pair_probs, pair_PdA = load_pdfs(all_df.loc[ true_pairs['prime_index'], 'ID'], all_df.loc[ true_pairs['partner_index'], 'ID'],
+    #                                  all_df.loc[ true_pairs['prime_index'], 'z'], all_df.loc[ true_pairs['partner_index'], 'z'],
+    #                                 all_df.loc[ true_pairs['prime_index'], 'ZBEST_TYPE'], 
+    #                                  all_df.loc[ true_pairs['partner_index'], 'ZBEST_TYPE'],
+    #                                  true_pairs['arc_sep'], field)
     
     # ### ~~~ save input data for the model then end the program ~~~ ###
     # load_pdfs(all_df.loc[ true_pairs['prime_index'], 'ID'], all_df.loc[ true_pairs['partner_index'], 'ID'], 
@@ -257,47 +257,49 @@ def determine_pairs(df, field):
     # ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
     
     
-    print('pair probability calculated in ', field)
-    true_pairs['pair_prob'] = pair_probs
-    true_pairs = true_pairs.reset_index(drop=True)
+    # print('pair probability calculated in ', field)
+    # true_pairs['pair_prob'] = pair_probs
+    
+    gtrue_pairs = true_pairs.reset_index(drop=True)
     
     # add back control galaxies that are only included in pairs where pair_prob < 0
-    gtrue_pairs = true_pairs[ true_pairs['pair_prob'] >= zp_cut ] ### MAY NEED TO RESET INDEX ###
+    # gtrue_pairs = true_pairs[ true_pairs['pair_prob'] >= zp_cut ] ### MAY NEED TO RESET INDEX ###
     # print(gtrue_pairs.index, len(pair_PdA))
-    pair_PdA_gt0 = pair_PdA[gtrue_pairs.index]
-    # save PdA arrays
-    hdu_dA = fits.PrimaryHDU(pair_PdA_gt0)
-    hdul_dA = fits.HDUList([hdu_dA])
-    if save == True:
-        hdul_dA.writeto(conv_PATH+'PdA_output/PdA_ztype-'+z_type+'_'+field+'_'+date+'.fits', overwrite=True)
-        print('PdA array saved in {}'.format(field))
-    gtrue_pairs = gtrue_pairs.reset_index(drop=True)
-    
-    # add galaxies that aren't pairs into the isolated sample:
-    iso_add = true_pairs[ true_pairs['pair_prob'] < zp_cut ]
-    # just stack prime and partner indices into massive array:
-    iso_add_idx = np.concatenate( (np.array(iso_add['prime_index']), np.array(iso_add['partner_index'])), axis=0)
-    # return unique indices
-    iso_add_uniq = np.unique(iso_add_idx)
-    # get rid of cases where those indices appear elsewhere, so create array for true pair indices
-    true_pair_idx = np.concatenate( (np.array(gtrue_pairs['prime_index']), np.array(gtrue_pairs['partner_index'])), axis=0)
-    # only keep the elements that aren't in true pair:
-    mask = np.isin(iso_add_uniq, true_pair_idx, invert=True)
-    iso_unq = iso_add_uniq[mask]
-    all_iso = np.concatenate( (all_iso, iso_unq), axis=0)
-    
-    print('{0}: pair_count = {1}, iso count = {2}'.format(field, len(gtrue_pairs), len(all_iso)))
+    # pair_PdA_gt0 = pair_PdA[gtrue_pairs.index]
+    # # save PdA arrays
+    # hdu_dA = fits.PrimaryHDU(pair_PdA_gt0)
+    # hdul_dA = fits.HDUList([hdu_dA])
+    # if save == True:
+    #     hdul_dA.writeto(conv_PATH+'PdA_output/PdA_ztype-'+z_type+'_'+field+'_'+date+'.fits', overwrite=True)
+    #     print('PdA array saved in {}'.format(field))
+    # gtrue_pairs = gtrue_pairs.reset_index(drop=True)
     
     
-    # pick out control galaxies
-    iso_idx = all_iso
-    iso_mass = all_df.loc[all_iso, 'MASS']
-    iso_z = all_df.loc[all_iso, 'z']
-    iso_sig = all_df.loc[all_iso, 'SIG_DIFF']
-    pair_idx = np.concatenate( (gtrue_pairs['prime_index'], gtrue_pairs['partner_index']) )
-    pair_mass = np.concatenate( (all_df.loc[ gtrue_pairs['prime_index'], 'MASS' ], all_df.loc[ gtrue_pairs['partner_index'], 'MASS' ]) )
-    pair_z = np.concatenate( (all_df.loc[ gtrue_pairs['prime_index'], 'z' ], all_df.loc[ gtrue_pairs['partner_index'], 'z' ]) )
-    pair_sig = np.concatenate( (all_df.loc[ gtrue_pairs['prime_index'], 'SIG_DIFF' ], all_df.loc[ gtrue_pairs['partner_index'], 'SIG_DIFF' ]) )
+#     # add galaxies that aren't pairs into the isolated sample:
+#     iso_add = true_pairs[ true_pairs['pair_prob'] < zp_cut ]
+#     # just stack prime and partner indices into massive array:
+#     iso_add_idx = np.concatenate( (np.array(iso_add['prime_index']), np.array(iso_add['partner_index'])), axis=0)
+#     # return unique indices
+#     iso_add_uniq = np.unique(iso_add_idx)
+#     # get rid of cases where those indices appear elsewhere, so create array for true pair indices
+#     true_pair_idx = np.concatenate( (np.array(gtrue_pairs['prime_index']), np.array(gtrue_pairs['partner_index'])), axis=0)
+#     # only keep the elements that aren't in true pair:
+#     mask = np.isin(iso_add_uniq, true_pair_idx, invert=True)
+#     iso_unq = iso_add_uniq[mask]
+#     all_iso = np.concatenate( (all_iso, iso_unq), axis=0)
+    
+#     print('{0}: pair_count = {1}, iso count = {2}'.format(field, len(gtrue_pairs), len(all_iso)))
+    
+    
+    # # pick out control galaxies
+    # iso_idx = all_iso
+    # iso_mass = all_df.loc[all_iso, 'MASS']
+    # iso_z = all_df.loc[all_iso, 'z']
+    # iso_sig = all_df.loc[all_iso, 'SIG_DIFF']
+    # pair_idx = np.concatenate( (gtrue_pairs['prime_index'], gtrue_pairs['partner_index']) )
+    # pair_mass = np.concatenate( (all_df.loc[ gtrue_pairs['prime_index'], 'MASS' ], all_df.loc[ gtrue_pairs['partner_index'], 'MASS' ]) )
+    # pair_z = np.concatenate( (all_df.loc[ gtrue_pairs['prime_index'], 'z' ], all_df.loc[ gtrue_pairs['partner_index'], 'z' ]) )
+    # pair_sig = np.concatenate( (all_df.loc[ gtrue_pairs['prime_index'], 'SIG_DIFF' ], all_df.loc[ gtrue_pairs['partner_index'], 'SIG_DIFF' ]) )
     
     gtrue_pairs['prime_ID'] = np.array(all_df.loc[ gtrue_pairs['prime_index'], 'ID' ])
     gtrue_pairs['partner_ID'] = np.array(all_df.loc[ gtrue_pairs['partner_index'], 'ID' ])
@@ -316,6 +318,29 @@ def determine_pairs(df, field):
     gtrue_pairs['partner_IR_AGN_DON'] = np.array(all_df.loc[gtrue_pairs['partner_index'], 'IR_AGN_DON'])
     gtrue_pairs['partner_IR_AGN_STR'] = np.array(all_df.loc[gtrue_pairs['partner_index'], 'IR_AGN_STR'])
     gtrue_pairs['field'] = [field] * len(gtrue_pairs)
+    
+    ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+    # I say just do the load_pdf logic here
+        # calculate pair fraction for each projected pair:
+    # pair_probs, pair_PdA = load_pdfs(all_df.loc[ true_pairs['prime_index'], 'ID'], all_df.loc[ true_pairs['partner_index'], 'ID'],
+    #                                  all_df.loc[ true_pairs['prime_index'], 'z'], all_df.loc[ true_pairs['partner_index'], 'z'],
+    #                                 all_df.loc[ true_pairs['prime_index'], 'ZBEST_TYPE'], 
+    #                                  all_df.loc[ true_pairs['partner_index'], 'ZBEST_TYPE'],
+    #                                  true_pairs['arc_sep'], field)
+    
+    pair_probs, pair_PdA = load_pdfs(gtrue_pairs, all_df)
+    gtrue_pairs['pair_prob'] = pair_probs
+    gtrue_pairs = gtrue_pairs.loc[ gtrue_pairs['pair_prob'] > 0 ]
+    
+    pair_PdA_gt0 = pair_PdA[gtrue_pairs.index]
+    # save PdA arrays
+    hdu_dA = fits.PrimaryHDU(pair_PdA_gt0)
+    hdul_dA = fits.HDUList([hdu_dA])
+    if save == True:
+        hdul_dA.writeto(conv_PATH+'PdA_output/PdA_ztype-'+z_type+'_'+field+'_'+date+'.fits', overwrite=True)
+        print('PdA array saved in {}'.format(field))
+        
+    gtrue_pairs = gtrue_pairs.reset_index(drop=True)
     
     
     ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
@@ -357,20 +382,23 @@ def determine_pairs(df, field):
     
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 
-def load_pdfs(gal1, gal2, z1, z2, zt1, zt2, theta, field):
+# def load_pdfs(gal1, gal2, z1, z2, zt1, zt2, theta, field):
+def load_pdfs(pair_df, iso_pool_df): # just load in the same iso_pool_df to make the initiliation of the arrays easier
+    field = pair_df['field'].unique()[0]
     print('beginning conv_prob() for ', field)
     
     all_prob = []
     all_PdA = []
     
-    print(field, len(gal1))
+    print(field, len(pair_df))
     
     dA = np.linspace(0, 200, num=2001)
     # define array sizes to save distributions as
-    PdA_2sav = np.zeros((len(gal1), len(dA)+2)) # so I can add the IDs and field as a check
-    Pzz_2sav = np.zeros((len(gal1), 1001)) # length of z array
+    PdA_2sav = np.zeros((len(pair_df), len(dA)+2)) # so I can add the IDs and field as a check
+    Pzz_2sav = np.zeros((len(pair_df), 1001)) # length of z array
     
-    # the COSMOS PDF are all loaded together, so do this outside for loop:
+    
+    # load in the PDFs:
     if field == 'COSMOS':
         with fits.open(cPATH+'COSMOS2020_R1/PZ/COSMOS2020_CLASSIC_R1_v2.0_LEPHARE_PZ.fits') as data:
             # fix big endian buffer error:
@@ -378,74 +406,62 @@ def load_pdfs(gal1, gal2, z1, z2, zt1, zt2, theta, field):
         COSMOS_PZ_arrf = COSMOS_PZ_arr.byteswap().newbyteorder()
         COSMOS_PZ = pd.DataFrame(COSMOS_PZ_arrf)
         z_01 = COSMOS_PZ.loc[0,1:].to_numpy()
-        PDF_array = COSMOS_PZ.T
+        PDF_array = np.array(COSMOS_PZ) # becomes an array in the column case
+
     else:
         with fits.open(PATH+'CANDELS_PDFs/'+field+'_mFDa4.fits') as data:
-            CANDELS_PZ = pd.DataFrame(data[0].data)
+            CANDELS_PZ_arr = np.array(data[0].data)
+        CANDELS_PZ_arrf = CANDELS_PZ_arr.byteswap().newbyteorder()
+        CANDELS_PZ = pd.DataFrame(CANDELS_PZ_arrf)
         z_01 = CANDELS_PZ.loc[0,1:].to_numpy()
-        PDF_array = CANDELS_PZ.T
-    
-    for i, (ID1, ID2, ID1_z, ID2_z, ID1_zt, ID2_zt, th) in tqdm(enumerate(zip(gal1, gal2, z1, z2, zt1, zt2, theta)), miniters=100): 
+        PDF_array = np.array(CANDELS_PZ)
+        
+    # also work just adjusting the arrays for spectroscopic redshifts here:
+    if z_type != 'p':
+        # if we are working with zspecs, we need to interpolate to a finer grid:
+        z_fine = np.linspace(0,10,10001).round(3)
+        # we wanna do this column wise hmmmmm... recreate an appropriate sized array:
+        PDF_array_ps = np.zeros((len(PDF_array),len(z_fine)+1))
+        # add the fine redshift as the first row:
+        PDF_array_ps[0,1:] = z_fine
+        # add the IDs on the left hand side below:
+        PDF_array_ps[:,0] = PDF_array[:,0]
+        # fill the phot-zs first: need the IDs of zbest_type = 'p'
+        fintp1 = interp1d(z_01, PDF_array[np.array(iso_pool_df.loc[ iso_pool_df['ZBEST_TYPE'] == 'p', 'ID' ]),1:], kind='linear')
+        # actually do them all at once first...
+        PDF_array_ps[ np.array(iso_pool_df.loc[ iso_pool_df['ZBEST_TYPE'] == 'p', 'ID' ]), 1: ] = fintp1(z_fine)
+        # now for spec-zs
+        # find where in the PDF_array_ps the z-value is our spec-z value and fill then normalize:
+        spec_IDs = np.array(iso_pool_df.loc[ iso_pool_df['ZBEST_TYPE'] == 's', 'ID' ])
+        spec_zs = np.array(iso_pool_df.loc[ iso_pool_df['ZBEST_TYPE'] == 's', 'z' ]).round(3)
+        # get the spec-z's to the right values
+        y = spec_zs
+        x = PDF_array_ps[0,:]
+        xsorted = np.argsort(x)
+        ypos = np.searchsorted(x[xsorted], y)
+        indices = xsorted[ypos]
+        PDF_array_ps[spec_IDs, indices ] = 1
+        # now normalize
+        PDF_array_ps[spec_IDs,1:] = ( PDF_array_ps[spec_IDs,1:] / 
+                                     np.array([np.trapz(PDF_array_ps[spec_IDs,1:], x=z_fine)]*PDF_array_ps[:,1:].shape[1]).T )
+        z_01 = z_fine
+        PDF_array = PDF_array_ps
 
-        if z_type != 'p':
-            # if we are working with zspecs, we need to interpolate to a finer grid:
-            z_fine = np.linspace(0,10,10001).round(3)
-            if ID1_zt == 's':
-                zspec1 = round(ID1_z, 3)
-                PDF1 = np.zeros(z_fine.shape)
-                PDF1[np.where(z_fine == zspec1)] = 1
-                PDF1 = PDF1 / np.trapz(PDF1, x=z_fine) # normalize
-            elif ID1_zt == 'p':
-                # interpolate
-                PDF1_01 = np.array(PDF_array.loc[ 1:, ID1 ])  ### BUG ###
-                fintp1 = interp1d(z_01, PDF1_01, kind='linear')
-                PDF1 = fintp1(z_fine)
-                PDF1 = PDF1 / np.trapz(PDF1, x=z_fine)
-            if ID2_zt == 's':
-                zspec2 = round(ID2_z, 3)
-                PDF2 = np.zeros(z_fine.shape)
-                PDF2[np.where(z_fine == zspec2)] = 1
-                PDF2 = PDF2 / np.trapz(PDF2, x=z_fine) # normalize
-            elif ID2_zt == 'p':
-                # interpolate
-                PDF2_01 = np.array(PDF_array.loc[ 1:, ID2 ])
-                fintp2 = interp1d(z_01, PDF2_01, kind='linear')
-                PDF2 = fintp2(z_fine)
-                PDF2 = PDF2 / np.trapz(PDF2, x=z_fine)
-            
-            Cv_prob = Convdif(z_fine, PDF1, PDF2, dv_lim=max_dv)
-            PdA, comb_PDF = PdA_prob(PDF1, PDF2, ID1_zt, ID2_zt, th, z_fine, dA)
-            
-        else:
-        
-            PDF1 = np.array(PDF_array.loc[ 1:, ID1 ])
-            PDF2 = np.array(PDF_array.loc[ 1:, ID2 ])
-            Cv_prob = Convdif(z_01, PDF1, PDF2, dv_lim=max_dv)
-            PdA, comb_PDF = PdA_prob(PDF1, PDF2, ID1_zt, ID2_zt, th, z_01, dA)
-        
-        
-        all_prob.append(Cv_prob)
-        # all_PdA.append(PdA)
-        
-#         ### WRITE THIS TO SPIT OUT ARRAYS FOR THE ENTIRE GROUP ###
-        # add the IDs to the first two entries
-        PdA_2sav[i,0] = ID1
-        PdA_2sav[i,1] = ID2
-        PdA_2sav[i,2:] = PdA
-#         Pzz_2sav[i,:] = comb_PDF
-        
-    ### SAVE AS A FITS FILE ###
-    # hdu_dA = fits.PrimaryHDU(PdA_2sav)
-    # hdul_dA = fits.HDUList([hdu_dA])
-    # hdul_dA.writeto(mPATH+'/TEST_PdA_'+field+'_8.09.fits', overwrite=True)
-#     hdu_zz = fits.PrimaryHDU(Pzz_2sav)
-#     hdul_zz = fits.HDUList([hdu_zz])
-#     hdul_zz.writeto(mPATH+'/Pzz_'+field+'.fits', overwrite=True)
+    # and no for loop necessary here: <== also just loaf in the match df instead
+    Cv_prob = Convdif(z_01, PDF_array[pair_df['prime_ID'],1:], PDF_array[pair_df['partner_ID'],1:], dv_lim=max_dv)
+    # wanna put these all in as arrays:
+    PdA, comb_PDF = PdA_prob(PDF_array[pair_df['prime_ID'],1:], PDF_array[pair_df['partner_ID'],1:], 
+                             np.array(pair_df['prime_zt']), np.array(pair_df['partner_zt']), 
+                             np.array(pair_df['arc_sep']), z_01, dA)
     
-    # np.savetxt(mPATH+'/PdA_'+field+'.txt', PdA_2sav)
-    # np.savetxt(mPATH+'/Pzz_'+field+'.txt', Pzz_2sav)
-            
-    return all_prob, PdA_2sav #####################
+    print('Made it through PdA_prob.')
+    
+    # fill the PdA_2sav array
+    PdA_2sav[:,0] = np.array(pair_df['prime_ID'])
+    PdA_2sav[:,1] = np.array(pair_df['partner_ID'])
+    PdA_2sav[:,2:] = PdA
+    
+    return Cv_prob, PdA_2sav
 
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 
@@ -504,49 +520,70 @@ def Convdif(z_all, Pz1, Pz2, dv_lim=1000):
 def PdA_prob(PDF1, PDF2, zt1, zt2, theta, z, dA):
     
     comb_PDF = PDF1*PDF2
-    ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
-    if z_type != 'p' and zt1 == 's' and zt2 == 's': # add if both z_types = 'spec' or something to avoid zero issues
-        middle_z = np.mean( (z[np.argmax(PDF1)], z[np.argmax(PDF2)]) )
-        # then make the corresponding comb_PDF value = 1
-        comb_PDF[ np.argmin(np.abs(z-middle_z)) ] = 1  
-    ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
-    comb_PDF = comb_PDF / np.trapz(comb_PDF, x=z) # and normalize
+    # get a middle_z for all rows:
+    mid_z_arr = np.vstack( (z[np.argmax(PDF1, axis=1)], z[np.argmax(PDF2, axis=1)]) ).T
+    middle_z = np.mean( mid_z_arr, axis=1 )
+    
+    # go into comb_PDF where zt1 and zt2 are both 's'
+    if z_type != 'p':
+        s2_idx = np.where((zt1=='s') & (zt2=='s'))[0]
+        y = middle_z[s2_idx]
+        x = z
+        xsorted = np.argsort(x)
+        ypos = np.searchsorted(x[xsorted], y)
+        indices = xsorted[ypos]
+        comb_PDF[ s2_idx, indices] = 1
+        
+    # normalize first
+    comb_PDF = (comb_PDF / np.array([np.trapz(comb_PDF, x=z)]*len(z)).T) # and normalize ### EXPECT ERROR HERE ###
+    comb_PDF = np.nan_to_num(comb_PDF) # if they don't ever overlap we get badness
     
     # so split 0-1.61 (1) and 1.62-10 (2)
     dA1 = ang_diam_dist( z[np.where(z <= 1.61)], theta )
     dA2 = ang_diam_dist( z[np.where(z > 1.61)], theta )
     z1 = z[np.where(z <= 1.61)]
     z2 = z[np.where(z > 1.61)]
-    comb_PDF1 = comb_PDF[np.where(z <= 1.61)] 
-    comb_PDF2 = comb_PDF[np.where(z > 1.61)] 
+    comb_PDF1 = comb_PDF[:,np.where(z <= 1.61)[0]] # some np where weirdness
+    comb_PDF2 = comb_PDF[:,np.where(z > 1.61)[0]] 
 
-    PdA11 = comb_PDF1 * np.abs(dzdA(dA1, z1, theta))
+    PdA11 = comb_PDF1 * np.abs(dzdA(dA1, z1, theta)) # bug here
     PdA11 = np.nan_to_num(PdA11) # fill the nan casued by division ny zero
     PdA12 = comb_PDF2 * np.abs(dzdA(dA2, z2, theta))
     
     ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
     # concatenate 1 and 2 just to find the max
-    dA_comb = np.concatenate((dA1, dA2))
-    PdA_comb = np.concatenate((PdA11, PdA12))
-    max_dA = dA_comb[np.argmax(PdA_comb)]
+    dA_comb = np.concatenate((dA1, dA2), axis=1)
+    PdA_comb = np.concatenate((PdA11, PdA12), axis=1)
+    max_dA = dA_comb[np.arange(len(dA_comb)),np.argmax(PdA_comb, axis=1)] # this was wrong bc every dA is gonna be different...
     ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 
     dA_new = dA
-    fintp1 = interp1d(dA1, PdA11, kind='linear', bounds_error=False, fill_value=0)
-    fintp2 = interp1d(dA2, PdA12, kind='linear', bounds_error=False, fill_value=0)
-
-    intr_PdA1 = fintp1(dA_new)
-    intr_PdA2 = fintp2(dA_new)
+    ## Oh this may be tricky bc each one is gonna have a different dA1 due to different thetas...
+    ## may need to look into a numpy interpolate OR loop here and fill (gross) ##
+    
+    # need to get a far as intr_PdA1 and 2 in the loop, so fill a numpy array-style:
+    print('Running interpolation loop, please wait.')
+    intr_PdA1 = np.zeros((len(dA1),len(dA_new)))
+    intr_PdA2 = np.zeros((len(dA2),len(dA_new)))
+    for i in tqdm(range(0,len(dA1)), miniters=100):
+        fintp1 = interp1d(dA1[i,:], PdA11[i,:], kind='linear', bounds_error=False, fill_value=0)
+        fintp2 = interp1d(dA2[i,:], PdA12[i,:], kind='linear', bounds_error=False, fill_value=0)
+        intr_PdA1[i,:] = fintp1(dA_new)
+        intr_PdA2[i,:] = fintp2(dA_new)
 
     PdA = intr_PdA1+intr_PdA2
     
-    ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
-    if z_type != 'p' and (zt1 == 's' or zt2 == 's'): # should only happen when there is a spec z
-        # find the element in dA_new that is closest to max_dA
-        PdA[ np.argmin(np.abs(dA_new-max_dA)) ] = np.max(PdA_comb)  
-    ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
-    
-    PdA = PdA / np.trapz(PdA, x=dA_new)
+    # okay, need to do a similar insertion
+    # find value in dA_new that is closest to max_dA in every row:
+    # gotta stretch out to get proper shapes:
+    dA_new2 = np.array([dA_new]*len(max_dA))
+    max_dA2 = np.array([max_dA]*len(dA_new)).T
+    if z_type != 'p':
+        s3_idx = np.where((zt1=='s') | (zt2=='s'))[0]
+        max_dA_idxs = np.argmin(np.abs(dA_new2[s3_idx,:]-max_dA2[s3_idx,:]), axis=1)
+        PdA[s3_idx, max_dA_idxs] = np.max(PdA_comb[s3_idx,:], axis=1)
+        
+    PdA = PdA / np.array([np.trapz(PdA, x=dA_new)]*PdA.shape[1]).T
     
     return np.nan_to_num(PdA), comb_PDF
 
@@ -563,7 +600,12 @@ def ang_diam_dist(z, theta, H0=70, Om_m=0.3, Om_rel=0, Om_lam=0.7, Om_0=1):
         zs = np.linspace(0,z,10, endpoint=True)
     dA = ( c / (H0*(1+z)) ) * np.trapz( ( 1 / np.sqrt( Om_m*(1+zs)**3 + Om_rel*(1+zs)**4 + Om_lam + (1-Om_0)*(1+zs)**2 ) ), x=zs )
     
-    return dA * theta * 1000 / ((180/np.pi)*3600)
+    try: # add another flag that will lead to the correct logic with an array
+        return dA * theta * 1000 / ((180/np.pi)*3600)
+    except:
+        exp_dA = np.array([dA]*len(theta))
+        exp_theta = np.array([theta]*exp_dA.shape[1]).T
+        return exp_dA * exp_theta * 1000 / ((180/np.pi)*3600) # CORRECT
 
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 
@@ -580,9 +622,11 @@ def dzdA(A, z, theta, H0=70, Om_m=0.3, Om_rel=0, Om_lam=0.7, Om_0=1):
     
     # dAdz = ( ( c/(H0*(1+z))) * ( 1 / np.sqrt( Om_m*(1+z)**3 + Om_rel*(1+z)**4 + Om_lam + (1-Om_0)*(1+z)**2 ) ) +
     #         (np.trapz( ( 1 / np.sqrt( Om_m*(1+zs)**3 + Om_rel*(1+zs)**4 + Om_lam + (1-Om_0)*(1+zs)**2 ) ), x=zs ) * (-c/H0)*((1+z)**-2) ))
-    
-    dzdA = dzdA * theta * 1000 / ((180/np.pi)*3600) # convert to kpc/"
-        
+    try:
+        dzdA = dzdA * theta * 1000 / ((180/np.pi)*3600) # convert to kpc/"
+    except:
+        exp_theta = np.array([theta]*dzdA.shape[1]).T
+        dzdA = dzdA * exp_theta * 1000 / ((180/np.pi)*3600) # convert to kpc/"
     return dzdA
 
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
@@ -662,19 +706,12 @@ def conv_apples(pair_df, iso_pool_df, base_dz=0.05, base_dM=0.05, dP=0.01, N_con
                                      np.array([np.trapz(PDF_array_ps[spec_IDs,1:], x=z_fine)]*PDF_array_ps[:,1:].shape[1]).T )
         z_01 = z_fine
         PDF_array = PDF_array_ps
-        # peak = np.array(iso_pool_df.loc[ iso_pool_df['ZBEST_TYPE'] == 'p', 'z' ])[202]
-        # # plt.plot( z_fine, PDF_array_ps[spec_IDs[100],1:] )
-        # plt.plot( z_fine, PDF_array_ps[np.array(iso_pool_df.loc[ iso_pool_df['ZBEST_TYPE'] == 'p', 'ID' ])[202],1:] )
-        # plt.plot([peak,peak], [0,100], color='red', linestyle='--')
-        # plt.ylim(0,10)
-        # plt.show()
-        # sys.exit()
             
     ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
     ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
     
     controls = []
-    
+    # this gotta be parallelizeable by pair df
     for i, (ID1, z1, M1, ID2, z2, M2, Pp, Qd) in enumerate(zip(pair_df['prime_ID'], pair_df['prime_z'], pair_df['prime_M'], 
                                   pair_df['partner_ID'], pair_df['partner_z'], pair_df['partner_M'], pair_df['pair_prob'],
                                   pair_df['Quadrant'])):
@@ -721,17 +758,25 @@ def conv_apples(pair_df, iso_pool_df, base_dz=0.05, base_dM=0.05, dP=0.01, N_con
             # if we are working with spec-z's, we gotta interpolate these...
             apple_df['Cp'] = Convdif(z_01, PDF_array[apple_df['ID1'],1:], PDF_array[apple_df['ID2'],1:], dv_lim=max_dv)
 
-            if Pp > 0.01:
-                apple_df2 = apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.02) & 
-                                         (apple_df['arc_sep'] > max_R_kpc) &
+            if np.log10(Pp) > -2: ### ~~~ WILL HAVE TO MESS AROUND WITH THESE PARAMETERS ~~~ ###
+                apple_df2 = apple_df.loc[ ((np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.02) | 
+                                           (np.abs(apple_df['Cp'] - Pp) < 0.01)) & (apple_df['arc_sep'] > max_R_kpc) &
                                          (apple_df['ID1'] != apple_df['ID2']) ].reset_index(drop=True)
-                apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.02) & (apple_df['arc_sep'] > max_R_kpc) &
+                apple_df.loc[  ((np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.02) | 
+                                           (np.abs(apple_df['Cp'] - Pp) < 0.01)) & (apple_df['arc_sep'] > max_R_kpc) &
                                          (apple_df['ID1'] != apple_df['ID2']), 'reuse_flag' ] = 1
-            else:                                                                          # probably too strict...
-                apple_df2 = apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.1) & 
+            # add another tier for extremely small porbabilities
+            elif np.log10(Pp) < -15:
+                apple_df2 = apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 2) & 
                                          (apple_df['arc_sep'] > max_R_kpc) &
                                          (apple_df['ID1'] != apple_df['ID2']) ].reset_index(drop=True)
-                apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.05) & (apple_df['arc_sep'] > max_R_kpc) &
+                apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 2) & (apple_df['arc_sep'] > max_R_kpc) &
+                                         (apple_df['ID1'] != apple_df['ID2']), 'reuse_flag' ] = 1
+            else:                                                                          # maybe too strict...
+                apple_df2 = apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.3) & 
+                                         (apple_df['arc_sep'] > max_R_kpc) &
+                                         (apple_df['ID1'] != apple_df['ID2']) ].reset_index(drop=True)
+                apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.3) & (apple_df['arc_sep'] > max_R_kpc) &
                                          (apple_df['ID1'] != apple_df['ID2']), 'reuse_flag' ] = 1
                 
             # add pair information:
@@ -746,7 +791,7 @@ def conv_apples(pair_df, iso_pool_df, base_dz=0.05, base_dM=0.05, dP=0.01, N_con
             # now sort on this
             apple_df2.sort_values(by=['dif'], inplace=True, ascending=True, ignore_index=True) # this resets the index
             
-            print(field, ID1, M1, z1, ID2, M2, z2, Pp, np.max(apple_df['Cp']), len(apple_df), len(apple_df2))
+            # print(field, ID1, M1, z1, ID2, M2, z2, Pp, np.max(apple_df['Cp']), len(apple_df), len(apple_df2))
         
             # take the top pair and add it to an array:
             if len(apple_df2) >= N_controls:   ### ~~~ POSSIBLE THE TWO CHOSEN PAIRS HAVE OVERLAPPING GALAXIES ~~~ ###
@@ -779,22 +824,7 @@ def conv_apples(pair_df, iso_pool_df, base_dz=0.05, base_dM=0.05, dP=0.01, N_con
         print('Control df saved in {}'.format(field))
         
         
-        # print(len(iso1), len(iso2))
-        # print(round(np.abs(z1-z2),2), len(apple_df)-len(apple_df2))
-        
-        ### ~~~ does it make sense that sometimes all matches are within the threshold... ~~~ ###
-        ### ~~~ seems to be tied with redhsift difference <== what we'd expect 
-        
-        ### ~~~ need to make sure that when we pick these, we don't pick a source that matches to itself
-        ### ~~~ AND we could also calulate an arcsecond sep column and make sure they are beyond ~ 25" or something ~~~ ###
-        ### ~~~ ===> this would take care of duplicates, albiet adding some time to the code
-        ### ~~~ through in a min pair prob for the whole field and that's gotta be the best you can do for this ~~~ ###
-        
-        
-    # # just save this array
-    # test_count = np.array(test_count)
-    # np.savetxt(field+'_testcount.txt', test_count, delimiter=',')
-               
+       # if I parallelize this, I would need to return each processor's controls and join them IN ORDER        
     return
         
 
