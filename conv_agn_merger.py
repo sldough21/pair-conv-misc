@@ -42,13 +42,13 @@ conv_PATH = '/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/conv_p
 cosmo = FlatLambdaCDM(H0=70 * u.km / u.s / u.Mpc, Tcmb0=2.725 * u.K, Om0=0.3) # 0.7 for omega
 # determine conservative ang separation correspondong to 150 kpc at z = 0.5
 R_kpc = cosmo.arcsec_per_kpc_proper(0.5) # arcsec/kpc at z=0.5
-max_R_kpc = 150*u.kpc * R_kpc # in arcseconds ### this is the bug right here
+max_R_kpc = 100*u.kpc * R_kpc # in arcseconds ### this is the bug right here
 
-mass_lo = 10 # lower mass limit of the more massive galaxy in a pair that we want to consider
+mass_lo = 9.4 # lower mass limit of the more massive galaxy in a pair that we want to consider
 gamma = 1.4 # for k correction calculation
 
-max_sep = 75 # 150 kpc <== should make farther out so as to not get varying sep measurements based on prime/partner z that don't cut them
-max_dv = 1000
+# max_sep = 100 # 150 kpc <== should make farther out so as to not get varying sep measurements based on prime/partner z that don't cut them
+max_dv = 500 
 
 sigma_cut = 100 # for individual PDF broadness
 zp_cut = 0 # for pairs that will negligently contribute to the final AGN fractions
@@ -58,22 +58,30 @@ duplicate_pairs = False
 apple_bob = True
 save = True
 t_run = False
-z_type = 'p' # ['p', 'ps' ,'s']
-date = '8.30' ### can automate this you know ###
-num_procs = 20
+z_type = 'ps' # ['p', 'ps' ,'s']
+date = '11.7' ### can automate this you know ###
+num_procs = 30
+num_PDFprocs = 20
 min_pp = 0.1
 ch_size = 10
 
 # initialize global dictionaries for iso_pools and PDF_array to help with multiprocesing
 iso_pool_dict = {}
 PDF_dict = {}
+prime_zt_dict, partner_zt_dict = {},{}
+chunked_idx_dict = {}
 base_dz=0.05
 base_dM=0.05
+base_dE=2
+base_dS=0.25
 dP=0.01
-N_controls=2
+N_controls=3 ###
+sig_det = 5
 # initialize worker dict:
 var_dict = {}
 bob_type = 'full' # 'full' or 'randbob' <== only works if duplicate pairs is true.
+# COSMOS_pt = 'ez' # 'ez', 'lp'
+full_SPLASH = False
 if bob_type == 'randbob':
     duplicate_pairs = True
     N_controls=1
@@ -86,7 +94,7 @@ def main():
     
     # we want to parallelize the data by fields, so:
     all_fields = ['GDS','EGS','COS','GDN','UDS','COSMOS'] # COS is for CANDELS COSMOS
-    # all_fields = ['GDN']
+    # all_fields = ['GDS']
     # all_fields = ['COSMOS']
     # process_samples('COSMOS')
     
@@ -109,22 +117,46 @@ def process_samples(field):
     
     # load in catalogs: <== specify column dtypes
     if field == 'COSMOS':
-        # df = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/CANDELS_COSMOS_CATS/'+field+'_data.csv',
+        df = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/CANDELS_COSMOS_CATS/'+field+'_data2.csv',
+                        dtype={'ZSPEC_R':object})
+        df = df.loc[ (df['LP_TYPE'] != 1) & (df['LP_TYPE'] != -99) & (df['MASS'] > (mass_lo)) & # (mass_lo-1)
+            (df['FLAG_COMBINED'] == 0) & (df['SIG_DIFF'] > 0) & #(df['HSC_i_MAG_AUTO'] < 27) & (df['HSC_i_MAG_AUTO'] > 0)
+                    (df['ZPHOT_PEAK'] > 0) & (df['CANDELS_FLAG'] == False) ]
+        if full_SPLASH == True:
+            df = df.drop(columns={'IRAC_CH1_FLUX', 'IRAC_CH1_FLUXERR', 'IRAC_CH2_FLUX', 'IRAC_CH2_FLUXERR'})
+            df = df.rename(columns={'SPLASH_CH1_FLUX':'IRAC_CH1_FLUX', 'SPLASH_CH1_FLUXERR':'IRAC_CH1_FLUXERR',
+                                    'SPLASH_CH2_FLUX':'IRAC_CH2_FLUX', 'SPLASH_CH2_FLUXERR':'IRAC_CH2_FLUXERR',
+                                    'SPLASH_CH3_FLUX':'IRAC_CH3_FLUX', 'SPLASH_CH3_FLUXERR':'IRAC_CH3_FLUXERR',
+                                    'SPLASH_CH4_FLUX':'IRAC_CH4_FLUX', 'SPLASH_CH4_FLUXERR':'IRAC_CH4_FLUXERR'})
+        elif full_SPLASH == False:
+            df = df.rename(columns={'SPLASH_CH3_FLUX':'IRAC_CH3_FLUX', 'SPLASH_CH3_FLUXERR':'IRAC_CH3_FLUXERR',
+                                    'SPLASH_CH4_FLUX':'IRAC_CH4_FLUX', 'SPLASH_CH4_FLUXERR':'IRAC_CH4_FLUXERR'})
+            
+        # calculate AB mags:
+        df['IRAC_CH1_ABMAG'] = F2m(df['IRAC_CH1_FLUX'], 1)
+        df['IRAC_CH2_ABMAG'] = F2m(df['IRAC_CH2_FLUX'], 2)
+        df['IRAC_CH3_ABMAG'] = F2m(df['IRAC_CH3_FLUX'], 3)
+        df['IRAC_CH4_ABMAG'] = F2m(df['IRAC_CH4_FLUX'], 4)
+        
+        # # try the FARMER EZ set:
+        # df = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/COSMOS_data/COSMOS_FARMER_select.csv',
         #                 dtype={'ZSPEC_R':object})
-        # df = df.loc[ (df['LP_TYPE'] != 1) & (df['LP_TYPE'] != -99) & (df['MASS'] > (mass_lo)) & # (mass_lo-1)
-        #     (df['FLAG_COMBINED'] == 0) & (df['SIG_DIFF'] < sigma_cut)]
-        # try the FARMER EZ set:
-        df = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/COSMOS_data/COSMOS_FARMER_select.csv',
-                        dtype={'ZSPEC_R':object})
-        df = df.loc[ (df['VALID_SOURCE'] == True) & (df['MASS'] > (mass_lo)) & # (mass_lo-1)
-            (df['FLAG_COMBINED'] == 0) & (df['SIG_DIFF'] < sigma_cut)]
+        # if COSMOS_pt == 'ez':
+        #     df = df.loc[ (df['VALID_SOURCE'] == True) & (df['ez_MASS'] > mass_lo) & (df['ez_MASS'] < 12) &
+        #         (df['FLAG_COMBINED'] == 0) & (df['ez_SIG_DIFF'] > 0) & (df['HSC_i_MAG'] < 26) ]
+        #     df = df.rename(columns={'ez_MASS':'MASS','ez_ZPHOT_PEAK':'ZPHOT_PEAK'})
+        # elif COSMOS_pt == 'lp':
+        #     df = df.loc[ (df['lp_type'] != 1) & (df['lp_type'] != -99) & (df['lp_MASS'] > mass_lo) & (df['lp_MASS'] < 12) &
+        #         (df['FLAG_COMBINED'] == 0) & (df['lp_SIG_DIFF'] > 0) & (df['HSC_i_MAG'] < 26) ]
+        #     df = df.rename(columns={'lp_MASS':'MASS','lp_ZPHOT_PEAK':'ZPHOT_PEAK'})
+            
     else:
-        df = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/CANDELS_COSMOS_CATS/'+field+'_data.csv',
+        df = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/CANDELS_COSMOS_CATS/'+field+'_data2.csv',
                         dtype={'ZSPEC_R':object})
-        df = df[ (df['CLASS_STAR'] < 0.9) & (df['PHOTFLAG'] == 0) & (df['MASS'] > (mass_lo)) & 
-            (df['SIG_DIFF'] < sigma_cut) ]
+        df = df[ (df['CLASS_STAR'] < 0.9) & (df['PHOTFLAG'] == 0) & (df['MASS'] > mass_lo) & (df['MASS'] < 15) &
+            (df['SIG_DIFF'] > 0) & (df['ZPHOT_PEAK'] > 0) ] 
+        #& (df['MAG_AUTO_F606W'] < 30) & (df['MAG_AUTO_F606W'] > 0) ]
     df = df.reset_index(drop=True)
-
         
     # ### ~~~ TEST RUN ~~~ ###
     if t_run == True:
@@ -146,7 +178,7 @@ def determine_pairs(df, field):
         df.loc[ df['ZBEST_TYPE'] == 's', 'SIG_DIFF' ] = 0
     
     # make definite redshift cut:
-    all_df = df.loc[ (df['z'] >= 0.5) & (df['z'] <= 3.0) ]  ### ~~~ GOTTA BE CAREFUL WITH EDGES ~~~ ###
+    all_df = df.loc[ (df['z'] > 0.5) & (df['z'] < 3.0) ]  ### ~~~ GOTTA BE CAREFUL WITH EDGES ~~~ ###
     print('all_df length', field, len(all_df))
     all_df = all_df.reset_index(drop=True)
     
@@ -183,11 +215,17 @@ def determine_pairs(df, field):
     # set the ones with incomplete data back to 0: POTENTIALLY UNECESSARY NOW (BELOW)
     all_df.loc[ (all_df['IRAC_CH1_FLUX'] <= 0) | (all_df['IRAC_CH2_FLUX'] <= 0) |
                (all_df['IRAC_CH3_FLUX'] <= 0) | (all_df['IRAC_CH4_FLUX'] <= 0), ['IR_AGN_DON', 'IR_AGN_STR'] ] = 0
-    all_df.loc[ (all_df['IRAC_CH1_FLUX']/all_df['IRAC_CH1_FLUXERR'] < 3) | (all_df['IRAC_CH2_FLUX']/all_df['IRAC_CH2_FLUXERR'] < 3) |
-               (all_df['IRAC_CH3_FLUX']/all_df['IRAC_CH3_FLUXERR'] < 3) | (all_df['IRAC_CH4_FLUX']/all_df['IRAC_CH4_FLUXERR'] < 3),
+    all_df.loc[ (all_df['IRAC_CH1_FLUX']/all_df['IRAC_CH1_FLUXERR'] < sig_det) | (all_df['IRAC_CH2_FLUX']/all_df['IRAC_CH2_FLUXERR'] < sig_det) |
+               (all_df['IRAC_CH3_FLUX']/all_df['IRAC_CH3_FLUXERR'] < sig_det) | (all_df['IRAC_CH4_FLUX']/all_df['IRAC_CH4_FLUXERR'] < sig_det),
               ['IR_AGN_DON', 'IR_AGN_STR'] ] = 0
     
-    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+#     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+#     print('Applying COSMOS mag cut...')
+#     all_df.loc[ (all_df['IRAC_CH1_ABMAG'] > 26) | (all_df['IRAC_CH2_ABMAG'] > 26) |
+#            (all_df['IRAC_CH3_ABMAG'] > 21) | (all_df['IRAC_CH4_ABMAG'] > 21),  # try the CANDELS COSMOS limits...
+#            ['IR_AGN_DON', 'IR_AGN_STR'] ] = 0
+    
+#     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
     
     # match catalogs:
     df_pos = SkyCoord(all_df['RA'],all_df['DEC'],unit='deg')
@@ -338,6 +376,8 @@ def determine_pairs(df, field):
     gtrue_pairs['partner_zt'] = np.array(all_df.loc[ gtrue_pairs['partner_index'], 'ZBEST_TYPE' ])
     gtrue_pairs['prime_M'] = np.array(all_df.loc[ gtrue_pairs['prime_index'], 'MASS' ])
     gtrue_pairs['partner_M'] = np.array(all_df.loc[ gtrue_pairs['partner_index'], 'MASS' ])
+    gtrue_pairs['prime_SFR'] = np.array(all_df.loc[ gtrue_pairs['prime_index'], 'LOGSFR_MED' ])
+    gtrue_pairs['partner_SFR'] = np.array(all_df.loc[ gtrue_pairs['partner_index'], 'LOGSFR_MED' ])
     gtrue_pairs['prime_LX'] = np.array(all_df.loc[ gtrue_pairs['prime_index'], 'LX' ])
     gtrue_pairs['partner_LX'] = np.array(all_df.loc[ gtrue_pairs['partner_index'], 'LX' ])
     gtrue_pairs['prime_PDFsig'] = np.array(all_df.loc[ gtrue_pairs['prime_index'], 'SIG_DIFF'])
@@ -361,11 +401,29 @@ def determine_pairs(df, field):
     gtrue_pairs['partner_CH3_FLUXERR'] = np.array(all_df.loc[ gtrue_pairs['partner_index'], 'IRAC_CH3_FLUXERR'])
     gtrue_pairs['partner_CH4_FLUXERR'] = np.array(all_df.loc[ gtrue_pairs['partner_index'], 'IRAC_CH4_FLUXERR'])
     
+    gtrue_pairs['prime_CH1_ABMAG'] = np.array(all_df.loc[ gtrue_pairs['prime_index'], 'IRAC_CH1_ABMAG'])
+    gtrue_pairs['prime_CH2_ABMAG'] = np.array(all_df.loc[ gtrue_pairs['prime_index'], 'IRAC_CH2_ABMAG'])
+    gtrue_pairs['prime_CH3_ABMAG'] = np.array(all_df.loc[ gtrue_pairs['prime_index'], 'IRAC_CH3_ABMAG'])
+    gtrue_pairs['prime_CH4_ABMAG'] = np.array(all_df.loc[ gtrue_pairs['prime_index'], 'IRAC_CH4_ABMAG'])
+    gtrue_pairs['partner_CH1_ABMAG'] = np.array(all_df.loc[ gtrue_pairs['partner_index'], 'IRAC_CH1_ABMAG'])
+    gtrue_pairs['partner_CH2_ABMAG'] = np.array(all_df.loc[ gtrue_pairs['partner_index'], 'IRAC_CH2_ABMAG'])
+    gtrue_pairs['partner_CH3_ABMAG'] = np.array(all_df.loc[ gtrue_pairs['partner_index'], 'IRAC_CH3_ABMAG'])
+    gtrue_pairs['partner_CH4_ABMAG'] = np.array(all_df.loc[ gtrue_pairs['partner_index'], 'IRAC_CH4_ABMAG'])
+    
     gtrue_pairs['prime_IR_AGN_DON'] = np.array(all_df.loc[gtrue_pairs['prime_index'], 'IR_AGN_DON'])
     gtrue_pairs['prime_IR_AGN_STR'] = np.array(all_df.loc[gtrue_pairs['prime_index'], 'IR_AGN_STR'])
     gtrue_pairs['partner_IR_AGN_DON'] = np.array(all_df.loc[gtrue_pairs['partner_index'], 'IR_AGN_DON'])
     gtrue_pairs['partner_IR_AGN_STR'] = np.array(all_df.loc[gtrue_pairs['partner_index'], 'IR_AGN_STR'])
+    
+    gtrue_pairs['prime_env'] = np.array(all_df.loc[gtrue_pairs['prime_index'], z_type+'_env'])
+    gtrue_pairs['partner_env'] = np.array(all_df.loc[gtrue_pairs['partner_index'], z_type+'_env'])
     gtrue_pairs['field'] = [field] * len(gtrue_pairs)
+    
+    
+    #### %%%%%%%%%%%%%%%%%%%%%%%% ####
+    #### %%% EDIT %%%%%%%%%%%%%%% ####
+    #### %%%%%%%%%%%%%%%%%%%%%%%% ####
+    gtrue_pairs = gtrue_pairs.loc[ gtrue_pairs['prime_M'] > 10 ].reset_index(drop=True)
     
     ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
     # I say just do the load_pdf logic here
@@ -409,7 +467,22 @@ def determine_pairs(df, field):
             all_df.loc[ i, 'all_pp'] = 0
         elif len(gal_match_probs) != 0: 
             all_df.loc[ i, 'all_pp'] = 1 - np.prod(1-gal_match_probs)
-            
+        
+        
+    # print('%%%%%%%%%%%%%%%%%%%%%')
+    # print(len(all_df))
+    # print(len(all_df.loc[ all_df['all_pp'] < 0.1 ]))
+    # print(i)
+    # save for dask demo:
+    # all_df.to_parquet('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/all_df.parquet.gzip', index=False)
+    # print('saved to parquet')
+#     GDS_PDF_array = PDF_dict['GDS']
+#     hdu_PDF = fits.PrimaryHDU(GDS_PDF_array)
+#     hdul_PDF = fits.HDUList([hdu_PDF])
+#     hdul_PDF.writeto('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/GDS_PDF.fits', overwrite=True)
+#     print('PDF array saved in {}'.format(field))
+#     sys.exit()
+    
     # plt.hist(all_df['all_pp'], bins=1000)
     # plt.xscale('log')
     # plt.show()
@@ -435,20 +508,6 @@ def determine_pairs(df, field):
         
     
     return
-
-
-### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
-
-def df_chunking(df, chunksize):
-    """Splits df into chunks, drops data of original df inplace"""
-    count = 0 # Counter for chunks
-    while len(df):
-        count += 1
-        # print('Preparing chunk {}'.format(count))
-        # Return df chunk
-        yield df.iloc[:chunksize].copy()
-        # Delete data in place because it is no longer needed
-        df.drop(df.index[:chunksize], inplace=True)
     
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 
@@ -460,7 +519,7 @@ def load_pdfs(pair_df, iso_pool_df): # just load in the same iso_pool_df to make
     all_prob = []
     all_PdA = []
     
-    print(field, len(pair_df))
+    print('number of pairs in load_pdfs', field, len(pair_df))
     
     dA = np.linspace(0, 200, num=2001)
     # define array sizes to save distributions as
@@ -470,9 +529,14 @@ def load_pdfs(pair_df, iso_pool_df): # just load in the same iso_pool_df to make
     
     # load in the PDFs:
     if field == 'COSMOS':
-        # with fits.open(cPATH+'COSMOS2020_R1/PZ/COSMOS2020_CLASSIC_R1_v2.0_LEPHARE_PZ.fits') as data:
-        with fits.open(cPATH+'COSMOS2020_R1/PZ/COSMOS2020_FARMER_R1_v2.0_EAZY_PZ.fits') as data:
-            # fix big endian buffer error:
+        with fits.open(cPATH+'COSMOS2020_R1/PZ/COSMOS2020_CLASSIC_R1_v2.0_LEPHARE_PZ.fits') as data:
+        # if COSMOS_pt == 'ez':
+        #     with fits.open(cPATH+'COSMOS2020_R1/PZ/COSMOS2020_FARMER_R1_v2.0_EAZY_PZ.fits') as data:
+        #         # fix big endian buffer error:
+        #         COSMOS_PZ_arr = np.array(data[0].data)
+        # elif COSMOS_pt == 'lp':
+        #     with fits.open(cPATH+'COSMOS2020_R1/PZ/COSMOS2020_FARMER_R1_v2.0_LEPHARE_PZ.fits') as data:
+        #         # fix big endian buffer error:
             COSMOS_PZ_arr = np.array(data[0].data)
         COSMOS_PZ_arrf = COSMOS_PZ_arr.byteswap().newbyteorder()
         COSMOS_PZ = pd.DataFrame(COSMOS_PZ_arrf)
@@ -521,8 +585,57 @@ def load_pdfs(pair_df, iso_pool_df): # just load in the same iso_pool_df to make
     # add PDF array to the PDF_dict for use later:
     PDF_dict[field] = PDF_array
 
-    ### ~~~ PARALELLIZE HERE ~~~ ###
-    # could create a list of 'regions' of the df to call, and could even shange them to an array like below
+#     ### ~~~ PARALELLIZE HERE ~~~ ### ~~~~~~~~~~~~~~~~~~~~~~~~ ### ~~~~~~~~~~~~~~~~~~~~~~~~ ###
+#     print('Creating pool for Cp and PdA...')
+#     # could create a list of 'regions' of the df to call, and could even shange them to an array like below
+#     # create an array of chunk sizes:
+#     idxs = np.linspace(0, len(pair_df), len(pair_df)+1, dtype=int)
+#     split_lines = np.linspace(0, 1e7, 1001, dtype=int)
+#     idx_split = np.split(idxs, split_lines)
+#     # will need to loop through idx_splitter to remove from the list empty arrays
+#     chunked_idx = []
+#     for ob in idx_split:
+#         if np.any(ob.shape) != 0:
+#             chunked_idx.append(ob) # list of indices array to split into:
+#     chunked_idx_dict[field] = chunked_idx
+    
+#     # we are going to want to split up pair_df the same as in bobbing:
+#     # will have to remove prime/partner_zt and put as a separate dict
+#     # may try this time just using a dict for pair_df and calling parts of it based on the parallelized chunked_idx...
+#     # eh nah I'll just do it the same way anyway, probably easiest on the universal memory that way anyway
+#     # make separate dicts for prime and partner zt to add in post:
+#     prime_zt_dict[field] = np.array(pair_df['prime_zt'])
+#     partner_zt_dict[field] = np.array(pair_df['partner_zt'])
+#     pair_df = pair_df.drop(columns={'prime_zt','partner_zt','field'})
+#     P_shape = np.array(pair_df).shape
+#     # Randomly generate some data
+#     P_data = np.array(pair_df)
+#     P_cols = np.array(pair_df.columns)
+#     P_field = field
+#     P = RawArray('d', P_shape[0] * P_shape[1]) # 'd' is for double, perhaps will fail with mixed data types...
+#     # Wrap X as an numpy array so we can easily manipulates its data.
+#     P_np = np.frombuffer(P).reshape(P_shape)
+#     # Copy data to our shared array.
+#     np.copyto(P_np, P_data)
+    
+#     # Start the process p
+#     # Start the process pool and do the computation.
+#     with Pool(processes=num_PDFprocs, initializer=init_worker, initargs=(P, P_cols, P_shape, P_field)) as pool:
+#         Cv_result, PdA_result = pool.map(pdf_pll, range(len(chunked_idx)))
+        
+#     pool.close()
+#     pool.join()
+#     prime_zt_dict.clear()
+#     partner_zt_dict.clear()
+#     chunked_idx_dict.clear()
+#     var_dict.clear()
+    
+#     # combine the result lists ---> will need to check order is okay, but I believe map returns things ordered
+#     Cv_prob = np.concatenate(Cv_result)
+#     PdA_2sav = np.sum(PdA_result, axis=1)
+    
+#     ### ~~~~~~~~~~~~~~~~~~~~~~~~ ### ~~~~~~~~~~~~~~~~~~~~~~~~ ### ~~~~~~~~~~~~~~~~~~~~~~~~ ###
+    
     
     # and no for loop necessary here: <== also just loaf in the match df instead
     Cv_prob = Convdif(z_01, PDF_array[pair_df['prime_ID'],1:], PDF_array[pair_df['partner_ID'],1:], dv_lim=max_dv)
@@ -530,17 +643,60 @@ def load_pdfs(pair_df, iso_pool_df): # just load in the same iso_pool_df to make
     PdA, comb_PDF = PdA_prob(PDF_array[pair_df['prime_ID'],1:], PDF_array[pair_df['partner_ID'],1:], 
                              np.array(pair_df['prime_zt']), np.array(pair_df['partner_zt']), 
                              np.array(pair_df['arc_sep']), z_01, dA)
-    
-    ### ~~~~~~~~~~~~~~~~~~~~~~~~ ###
-    
-    print('Made it through PdA_prob.')
-    
-    # fill the PdA_2sav array
+
+# fill the PdA_2sav array
     PdA_2sav[:,0] = np.array(pair_df['prime_ID'])
     PdA_2sav[:,1] = np.array(pair_df['partner_ID'])
     PdA_2sav[:,2:] = PdA
     
+    
+    ### ~~~~~~~~~~~~~~~~~~~~~~~~ ###
+    
+    
     return Cv_prob, PdA_2sav
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+
+def pdf_pll(i):
+        
+    field = var_dict['field']
+    idxs = chunked_idx_dict[field]
+    idxs = idxs[i]
+    PDF_array = PDF_dict[field]
+    z_01 = PDF_array[0,1:]
+    zt1_arr = prime_zt_dict[field]
+    zt2_arr = partner_zt_dict[field]
+    
+    print('Getting Pc and PdA for sources {0}-{1}'.format(idxs[0], idxs[-1]))
+
+    # can recover pair_df data from var_dict:
+    pair_arr = np.frombuffer(var_dict['P']).reshape(var_dict['Pshape']) # what about the i!
+    
+    ID1 = np.array(pair_arr[idxs, np.where(var_dict['Pcols'] == 'prime_ID')][0], dtype=int)
+    ID2 = np.array(pair_arr[idxs, np.where(var_dict['Pcols'] == 'partner_ID')][0], dtype=int)
+    arc_sep = pair_arr[idxs, np.where(var_dict['Pcols'] == 'arc_sep')][0]
+    zt1 = zt1_arr[ idxs ]
+    zt2 = zt2_arr[ idxs ]
+        
+    dA = np.linspace(0, 200, num=2001)
+    PdA_2sav = np.zeros((len(PDF_array), len(dA)+2))
+    
+    # get the Cv_prob and PdA for this processors chunk:
+    Cv_prob = Convdif(z_01, PDF_array[ID1,1:], PDF_array[ID2,1:], dv_lim=max_dv)
+    # wanna put these all in as arrays:
+    PdA, comb_PDF = PdA_prob(PDF_array[ID1,1:], PDF_array[ID2,1:], np.array(zt1), np.array(zt2), np.array(arc_sep), z_01, dA)
+    
+    # now how do I return these...
+    # fill part of the PdA_2sav array
+    PdA_2sav[idxs,0] = np.array(ID1)
+    PdA_2sav[idxs,1] = np.array(ID2)
+    PdA_2sav[idxs,2:] = PdA
+    # and return Cv_prob simply as an array:
+    # the idea for PdA_2sav is to return them all together then just add them, and there should be no overlapping values
+          
+    print('Pc and PdA for sources {0}-{1} Secure'.format(idxs[0], idxs[-1]))
+    
+    return Cv_prob, PdA_2sav 
 
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 
@@ -671,6 +827,24 @@ def PdA_prob(PDF1, PDF2, zt1, zt2, theta, z, dA):
 
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 
+def F2m(F, ch): # goes to Vega then to AB
+    if ch == 1:
+        F0 = 280.9
+        K = 2.788
+    elif ch == 2:
+        F0 = 179.7
+        K = 3.255
+    elif ch == 3:
+        F0 = 115
+        K = 3.743
+    elif ch == 4:
+        F0 = 64.9
+        K = 4.372
+    return 2.5*np.log10(F0/(F*1e-6)) + K
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+
+
 # def angular diameter function:
 def ang_diam_dist(z, theta, H0=70, Om_m=0.3, Om_rel=0, Om_lam=0.7, Om_0=1):
     
@@ -729,9 +903,10 @@ def conv_apples(pair_df, iso_pool_df):
     pair_df['Quadrant'] = [0]*len(pair_df)
         
     # load in the PDFs:
+    
     if field == 'COSMOS':
         print('Breaking up into quadrants...')
-        percs = np.linspace(0,100,5) # will split COSMOS up into 16 pieces
+        percs = np.linspace(0,100,4) # will split COSMOS up into 16 pieces  ##### think of when defaulting to CANDELS #####
         RA_perc = np.percentile(iso_pool_df['RA'], percs)
         DEC_perc = np.percentile(iso_pool_df['DEC'], percs)
         for i in range(len(RA_perc)-1):
@@ -895,6 +1070,10 @@ def bobbing_pll(i):
     st = time.perf_counter()
     
     field = var_dict['field']
+    if field == 'COSMOS':
+        dM_lim = 0.5
+    else:
+        dM_lim = 0.5
     iso_pool_df = iso_pool_dict[field]
     PDF_array = PDF_dict[field]
     z_01 = PDF_array[0,1:]
@@ -918,40 +1097,69 @@ def bobbing_pll(i):
     ID1 = pair_arr[i, np.where(var_dict['Pcols'] == 'prime_ID')][0][0]
     z1 = pair_arr[i, np.where(var_dict['Pcols'] == 'prime_z')][0][0]
     M1 = pair_arr[i, np.where(var_dict['Pcols'] == 'prime_M')][0][0]
+    SIG1 = pair_arr[i, np.where(var_dict['Pcols'] == 'prime_PDFsig')][0][0]
+    E1 = pair_arr[i, np.where(var_dict['Pcols'] == 'prime_env')][0][0]
     ID2 = pair_arr[i, np.where(var_dict['Pcols'] == 'partner_ID')][0][0]
     z2 = pair_arr[i, np.where(var_dict['Pcols'] == 'partner_z')][0][0]
     M2 = pair_arr[i, np.where(var_dict['Pcols'] == 'partner_M')][0][0]
+    SIG2 = pair_arr[i, np.where(var_dict['Pcols'] == 'partner_PDFsig')][0][0]
+    E2 = pair_arr[i, np.where(var_dict['Pcols'] == 'partner_env')][0][0]
     Pp = pair_arr[i, np.where(var_dict['Pcols'] == 'pair_prob')][0][0]
     Qd = pair_arr[i, np.where(var_dict['Pcols'] == 'Quadrant')][0][0]
+    all_Qds = np.unique(pair_arr[:, np.where(var_dict['Pcols'] == 'Quadrant')][0])
+    
+    if Pp == 0:
+        print('PP = 0', ID1, ID2)
                        
     got = False
+    good_old = False
     dz = base_dz
     dM = base_dM
+    dE = base_dE
+    dS = base_dS
     tried_arr = []
     # start = time.perf_counter()
     while got == False:
         iso1 = iso_pool_df.loc[ (np.abs(iso_pool_df['z']-z1) < dz) & (np.abs(iso_pool_df['MASS']-M1) < dM) &
-                              (iso_pool_df['ID'] != ID1) & (iso_pool_df['ID'] != ID2) & (iso_pool_df['Quadrant'] == Qd), 
-                              ['ID','RA','DEC','MASS','z','LX','IR_AGN_DON','IR_AGN_STR',
+                              (iso_pool_df['ID'] != ID1) & (iso_pool_df['ID'] != ID2) & (iso_pool_df['Quadrant'] == Qd) &
+                               (np.abs(iso_pool_df[z_type+'_env']-E1) < dE) & 
+                               (np.abs(iso_pool_df['SIG_DIFF'] - SIG1) < dS), 
+                              ['ID','RA','DEC','MASS','LOGSFR_MED','z','LX','IR_AGN_DON','IR_AGN_STR',
                               'IRAC_CH1_FLUX','IRAC_CH2_FLUX','IRAC_CH3_FLUX','IRAC_CH4_FLUX',
-                              'IRAC_CH1_FLUXERR','IRAC_CH2_FLUXERR','IRAC_CH3_FLUXERR','IRAC_CH4_FLUXERR'] ] 
-        iso1 = iso1.rename(columns={'RA':'RA1', 'DEC':'DEC1', 'z':'z1', 'MASS':'MASS1', 
+                              'IRAC_CH1_FLUXERR','IRAC_CH2_FLUXERR','IRAC_CH3_FLUXERR','IRAC_CH4_FLUXERR',
+                              'IRAC_CH1_ABMAG','IRAC_CH2_ABMAG','IRAC_CH3_ABMAG','IRAC_CH4_ABMAG',
+                               z_type+'_env'] ] 
+        iso1 = iso1.rename(columns={'RA':'RA1', 'DEC':'DEC1', 'z':'z1', 'MASS':'MASS1', 'LOGSFR_MED':'SFR1',
                                     'LX':'LX1', 'IR_AGN_DON':'IR_AGN_DON1', 'IR_AGN_STR':'IR_AGN_STR1',
                                    'IRAC_CH1_FLUX':'IRAC_CH1_FLUX1', 'IRAC_CH2_FLUX':'IRAC_CH2_FLUX1',
                                    'IRAC_CH3_FLUX':'IRAC_CH3_FLUX1', 'IRAC_CH4_FLUX':'IRAC_CH4_FLUX1',
                                    'IRAC_CH1_FLUXERR':'IRAC_CH1_FLUXERR1', 'IRAC_CH2_FLUXERR':'IRAC_CH2_FLUXERR1',
-                                   'IRAC_CH3_FLUXERR':'IRAC_CH3_FLUXERR1', 'IRAC_CH4_FLUXERR':'IRAC_CH4_FLUXERR1'})
+                                   'IRAC_CH3_FLUXERR':'IRAC_CH3_FLUXERR1', 'IRAC_CH4_FLUXERR':'IRAC_CH4_FLUXERR1',
+                                   'IRAC_CH1_ABMAG':'IRAC_CH1_ABMAG1','IRAC_CH2_ABMAG':'IRAC_CH2_ABMAG1',
+                                   'IRAC_CH3_ABMAG':'IRAC_CH3_ABMAG1','IRAC_CH4_ABMAG':'IRAC_CH4_ABMAG1',
+                                   z_type+'_env':'ENV1'})
         iso2 = iso_pool_df.loc[ (np.abs(iso_pool_df['z']-z2) < dz) & (np.abs(iso_pool_df['MASS']-M2) < dM) &
-                              (iso_pool_df['ID'] != ID1) & (iso_pool_df['ID'] != ID2) & (iso_pool_df['Quadrant'] == Qd),
-                              ['ID','RA','DEC','MASS','z','LX','IR_AGN_DON','IR_AGN_STR',
+                              (iso_pool_df['ID'] != ID1) & (iso_pool_df['ID'] != ID2) & (iso_pool_df['Quadrant'] == Qd) & 
+                               (np.abs(iso_pool_df[z_type+'_env']-E2) < dE) & 
+                               (np.abs(iso_pool_df['SIG_DIFF'] - SIG2) < dS),
+                              ['ID','RA','DEC','MASS','LOGSFR_MED','z','LX','IR_AGN_DON','IR_AGN_STR',
                               'IRAC_CH1_FLUX','IRAC_CH2_FLUX','IRAC_CH3_FLUX','IRAC_CH4_FLUX',
-                              'IRAC_CH1_FLUXERR','IRAC_CH2_FLUXERR','IRAC_CH3_FLUXERR','IRAC_CH4_FLUXERR'] ]
-        iso2 = iso2.rename(columns={'RA':'RA2', 'DEC':'DEC2', 'z':'z2', 'MASS':'MASS2', 
+                              'IRAC_CH1_FLUXERR','IRAC_CH2_FLUXERR','IRAC_CH3_FLUXERR','IRAC_CH4_FLUXERR',
+                              'IRAC_CH1_ABMAG','IRAC_CH2_ABMAG','IRAC_CH3_ABMAG','IRAC_CH4_ABMAG',
+                              z_type+'_env'] ]
+        iso2 = iso2.rename(columns={'RA':'RA2', 'DEC':'DEC2', 'z':'z2', 'MASS':'MASS2', 'LOGSFR_MED':'SFR2',
                                     'LX':'LX2', 'IR_AGN_DON':'IR_AGN_DON2', 'IR_AGN_STR':'IR_AGN_STR2',
                                    'IRAC_CH1_FLUX':'IRAC_CH1_FLUX2', 'IRAC_CH2_FLUX':'IRAC_CH2_FLUX2',
                                    'IRAC_CH3_FLUX':'IRAC_CH3_FLUX2', 'IRAC_CH4_FLUX':'IRAC_CH4_FLUX2',
                                    'IRAC_CH1_FLUXERR':'IRAC_CH1_FLUXERR2', 'IRAC_CH2_FLUXERR':'IRAC_CH2_FLUXERR2',
-                                   'IRAC_CH3_FLUXERR':'IRAC_CH3_FLUXERR2', 'IRAC_CH4_FLUXERR':'IRAC_CH4_FLUXERR2'})
+                                   'IRAC_CH3_FLUXERR':'IRAC_CH3_FLUXERR2', 'IRAC_CH4_FLUXERR':'IRAC_CH4_FLUXERR2',
+                                   'IRAC_CH1_ABMAG':'IRAC_CH1_ABMAG2','IRAC_CH2_ABMAG':'IRAC_CH2_ABMAG2',
+                                   'IRAC_CH3_ABMAG':'IRAC_CH3_ABMAG2','IRAC_CH4_ABMAG':'IRAC_CH4_ABMAG2',
+                                   z_type+'_env':'ENV2'})
+        
+        # print(iso1.loc[:,['MASS1', 'z1', 'SIG_DIFF','ENV1']])
+        # print(M1, z1, SIG1, E1)
+        # sys.exit()
         # somehow combine the iso1 and iso2 df into a M x N long df that has all possible combinations of them
         # useful to calculate conv_prob columns-wise
         apple_df = iso1.merge(iso2, how='cross').rename(columns={'ID_x':'ID1','ID_y':'ID2'})
@@ -970,6 +1178,8 @@ def bobbing_pll(i):
         if len(apple_df) == 0:
             dz = dz + 0.03
             dM = dM + 0.03
+            dE = dE + 2
+            dS = dS + 0.125
             continue
 
         # make sure a separation cut is adequite:
@@ -979,38 +1189,51 @@ def bobbing_pll(i):
 
         # if we are working with spec-z's, we gotta interpolate these...
         apple_df['Cp'] = Convdif(z_01, PDF_array[apple_df['ID1'],1:], PDF_array[apple_df['ID2'],1:], dv_lim=max_dv)
+        # apple_df = apple_df.loc[ apple_df['Cp'] > 0 ] #### EDIT 
 
-        if np.log10(Pp) > -2: ### ~~~ WILL HAVE TO MESS AROUND WITH THESE PARAMETERS ~~~ ###
-            apple_df2 = apple_df.loc[ ((np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.02) | 
+        if np.log10(Pp) >= -2: ### ~~~ WILL HAVE TO MESS AROUND WITH THESE PARAMETERS ~~~ ###
+            apple_df2 = apple_df.loc[ ((np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.05) |
                                        (np.abs(apple_df['Cp'] - Pp) < 0.01)) & (apple_df['arc_sep'] > max_R_kpc) &
                                      (apple_df['ID1'] != apple_df['ID2']) ].reset_index(drop=True)
-            apple_df.loc[  ((np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.02) | 
+            # add a second tier here to loosen who gets chosen, that way after a certain amount of attempts we just choose the best
+            apple_df.loc[  ((np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.5) | ## * ##
                                        (np.abs(apple_df['Cp'] - Pp) < 0.01)) & (apple_df['arc_sep'] > max_R_kpc) &
                                      (apple_df['ID1'] != apple_df['ID2']), 'reuse_flag' ] = 1
-        # add another tier for extremely small porbabilities
-        elif np.log10(Pp) < -15:
-            apple_df2 = apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 2) & 
+        # add another tier for extremely small probabilities
+        elif np.log10(Pp) < -8:
+            apple_df2 = apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 4) & 
                                      (apple_df['arc_sep'] > max_R_kpc) &
                                      (apple_df['ID1'] != apple_df['ID2']) ].reset_index(drop=True)
-            apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 2) & (apple_df['arc_sep'] > max_R_kpc) &
+            apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 4) & (apple_df['arc_sep'] > max_R_kpc) &
+                                     (apple_df['ID1'] != apple_df['ID2']), 'reuse_flag' ] = 1
+        elif np.log10(Pp) < -2 and np.log10(Pp) > -3:
+            apple_df2 = apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.5) & 
+                                     (apple_df['arc_sep'] > max_R_kpc) &
+                                     (apple_df['ID1'] != apple_df['ID2']) ].reset_index(drop=True)
+            apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.5) & (apple_df['arc_sep'] > max_R_kpc) &
                                      (apple_df['ID1'] != apple_df['ID2']), 'reuse_flag' ] = 1
         else:                                                                          # maybe too strict...
-            apple_df2 = apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.3) & 
+            apple_df2 = apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 1) & 
                                      (apple_df['arc_sep'] > max_R_kpc) &
                                      (apple_df['ID1'] != apple_df['ID2']) ].reset_index(drop=True)
-            apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.3) & (apple_df['arc_sep'] > max_R_kpc) &
+            apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 1) & (apple_df['arc_sep'] > max_R_kpc) &
                                      (apple_df['ID1'] != apple_df['ID2']), 'reuse_flag' ] = 1
 
         # add pair information:
         apple_df2['P_ID1'] = np.array([ID1]*len(apple_df2), dtype=int)
         apple_df2['P_ID2'] = np.array([ID2]*len(apple_df2), dtype=int)
         apple_df2['Pp'] = np.array([Pp]*len(apple_df2), dtype=float)
-
+                                                # Cp could theoretically be 0... causing log10 of 0
         # organize to get best fit:  ### may need to think how the Cp dif is made (log or not), doubt it'd matter tho ###
-        apple_df2['dif'] = (10*(np.abs(np.log10(apple_df2['Cp']) - np.log10(Pp)))**2 + 
-                                (apple_df2['z1'] - z1)**2 + (apple_df2['MASS1'] - M1)**2 +
-                            (apple_df2['z2'] - z2)**2 + (apple_df2['MASS2'] - M2)**2)
+        apple_df2['dif'] = (10*(np.log10(apple_df2['Cp']) - np.log10(Pp))**2 + 
+                                (apple_df2['z1'] - z1)**2 + (apple_df2['MASS1'] - M1)**2 + 0.5*(apple_df2['ENV1'] - E1)**2 +
+                            (apple_df2['z2'] - z2)**2 + (apple_df2['MASS2'] - M2)**2 + 0.5*(apple_df2['ENV2'] - E2)**2)
         # now sort on this
+        # add good values to this if they exist:
+        if good_old == True:
+            apple_df2 = good_old_df
+            apple_df2 = pd.concat(apple_df2, good_old_df, ignore_index=True) 
+        
         apple_df2.sort_values(by=['dif'], inplace=True, ascending=True, ignore_index=True) # this resets the index
 
         # print(field, ID1, M1, z1, ID2, M2, z2, Pp, np.max(apple_df['Cp']), len(apple_df), len(apple_df2))
@@ -1031,11 +1254,64 @@ def bobbing_pll(i):
             # get an array of str IDs that have been tried already
             tried_arr = np.concatenate( (tried_arr, apple_df.loc[ apple_df['reuse_flag'] == 0, 'pair_str' ]) ) 
             dz = dz + 0.03
-            dM = dM + 0.03
-            if time.perf_counter() - st > 21600:
-                print('BUG OUT IN', os.getpid(), ID1, M1, z1, ID2, M2, z2)
-            # if dz > 0.4:
-            #     print('dz exceeds 0.4', field, ID1, M1, z1, ID2, M2, z2, Pp, np.max(apple_df['Cp']), len(apple_df), len(apple_df2))
+            dM = dM + 0.03 ####
+            dE = dE + 2
+            dS = dS + 0.125
+            if dM > dM_lim: # set this on mass instead...
+                print('search has exceeded appropriate mass threshold...')
+                print('to avoid bias, we are going to select the closest matches thus far...')
+                print('BUG OUT IN', os.getpid(), ID1, M1, z1, E1, ID2, M2, z2, E2, Pp)
+                # print('but we tried...', np.sort(apple_df['Cp'])[-3:])
+                # print('good selections in apple_df2 =', apple_df2)
+                # just take them...
+                print('just gonna take the top choices for now...')
+                # add pair information:
+                apple_df['P_ID1'] = np.array([ID1]*len(apple_df), dtype=int)
+                apple_df['P_ID2'] = np.array([ID2]*len(apple_df), dtype=int)
+                apple_df['Pp'] = np.array([Pp]*len(apple_df), dtype=float)
+                
+                apple_df['dif'] = (10*(np.log10(apple_df['Cp']) - np.log10(Pp))**2 + 
+                                (apple_df['z1'] - z1)**2 + (apple_df['MASS1'] - M1)**2 + 0.5*(apple_df['ENV1'] - E1)**2 +
+                            (apple_df['z2'] - z2)**2 + (apple_df['MASS2'] - M2)**2 + 0.5*(apple_df['ENV2'] - E2)**2)
+                # now sort on this
+                apple_df = apple_df.loc[ (apple_df['ID1'] != apple_df['ID2']) & 
+                                        (apple_df['arc_sep'] > max_R_kpc) ].reset_index(drop=True)
+                apple_df.sort_values(by=['dif'], inplace=True, ascending=True, ignore_index=True) # this resets the index
+                print('settled for')
+                print(apple_df.loc[ :10, ['pair_str','z1','z2', 'Cp','dif', 'P_ID1','P_ID2', 'Pp'] ])
+                print(ID1, ID2, Pp)
+                control_df = apple_df.iloc[:N_controls]
+                print(control_df)
+                got = True
+                
+#                 # should save some that actually match the criteria before switching regions:
+#                 N_good = len(apple_df2)
+#                 if N_good > 0:
+#                     good_old_df = apple_df2.iloc[:N_good]
+#                     print('TAKING {} INTO NEXT REGION'.format(N_good))
+#                     print(good_old_df)
+#                     # N_controls = N_controls - N_good
+#                     good_old = True
+                
+#                 # take out this Qd from the list
+#                 Qd_old = Qd
+#                 n_Qds = all_Qds[np.where(all_Qds != Qd)[0]]
+#                 print('%%%%')
+#                 print('TEST', n_Qds, all_Qds[np.where(all_Qds != Qd)[0]])
+#                 print(Qd_old, all_Qds)
+#                 print('%%%%')
+#                 Qd = random.choice(n_Qds)
+#                 print('moving from Q{0} to Q{1}'.format(Qd_old, Qd)) 
+#                 # print('length test:', len(n_Qds))
+#                 st = time.perf_counter()
+                
+            # tell me if it's searched over everything and found nothing:
+            if ((z1 + dz > 3) and (z1 - dz < 0.5)) or ((z2 + dz > 3) and (z2 - dz < 0.5)):
+                print('z FAIL -> NOTHING IN RANGE', ID1, M1, z1, E1, ID2, M2, z2, E2)
+            if ((M1 + dM > 12) and (M1 - dM < mass_lo)) or ((M2 + dM > 12) and (M2 - dM < mass_lo)):
+                print('M FAIL -> NOTHING IN RANGE', ID1, M1, z1, E1, ID2, M2, z2, E2)
+            # if dz > 0.5:
+            #     print('dz exceeds 0.5', field, ID1, M1, z1, ID2, M2, z2, Pp, np.max(apple_df['Cp']), len(apple_df), len(apple_df2))
 
 
     # # combine all control_dfs into one and save for this field:
@@ -1043,6 +1319,7 @@ def bobbing_pll(i):
     # control_df = pd.DataFrame( np.concatenate(controls), columns=pd.DataFrame(controls[0]).columns )
     # # add field information
     
+    # print(dM)
     # try removing pait str and add in post: #
     control_df = control_df.drop(columns={'pair_str'})
     # control_df['field'] = [field]*len(control_df)
@@ -1055,7 +1332,7 @@ def bobbing_pll(i):
             
        # if I parallelize this, I would need to return each processor's controls and join them IN ORDER      
                 
-    print('Apples Bobbed:', i)
+    # print('Apples Bobbed:', i, ID1, ID2)
     return control_df
         
 
