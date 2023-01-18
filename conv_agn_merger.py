@@ -17,7 +17,7 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 import math as m
 import multiprocessing
-from multiprocessing import Pool, freeze_support, RLock, RawArray
+from multiprocessing import Pool, freeze_support, RLock, RawArray, Manager
 from functools import partial
 
 from astropy.cosmology import FlatLambdaCDM
@@ -48,7 +48,7 @@ mass_lo = 9.4 # lower mass limit of the more massive galaxy in a pair that we wa
 gamma = 1.4 # for k correction calculation
 
 # max_sep = 100 # 150 kpc <== should make farther out so as to not get varying sep measurements based on prime/partner z that don't cut them
-max_dv = 500 
+max_dv = 1000 
 
 sigma_cut = 100 # for individual PDF broadness
 zp_cut = 0 # for pairs that will negligently contribute to the final AGN fractions
@@ -58,22 +58,24 @@ duplicate_pairs = False
 apple_bob = True
 save = True
 t_run = False
-z_type = 'ps' # ['p', 'ps' ,'s']
-date = '11.7' ### can automate this you know ###
-num_procs = 30
+z_type = 'p' # ['p', 'ps' ,'s']
+date = '12.13' ### can automate this you know ### COSMOS version of 11.11 didn't work...
+num_procs = 25
 num_PDFprocs = 20
 min_pp = 0.1
+pp_cut = 0 ### ~~~ NEW ~~~ ###
 ch_size = 10
 
 # initialize global dictionaries for iso_pools and PDF_array to help with multiprocesing
 iso_pool_dict = {}
+controlled_IDs = {}
 PDF_dict = {}
 prime_zt_dict, partner_zt_dict = {},{}
 chunked_idx_dict = {}
 base_dz=0.05
 base_dM=0.05
 base_dE=2
-base_dS=0.25
+base_dS=0.05 # and make an incremental log difference...
 dP=0.01
 N_controls=3 ###
 sig_det = 5
@@ -94,7 +96,7 @@ def main():
     
     # we want to parallelize the data by fields, so:
     all_fields = ['GDS','EGS','COS','GDN','UDS','COSMOS'] # COS is for CANDELS COSMOS
-    # all_fields = ['GDS']
+    # all_fields = ['GDN']
     # all_fields = ['COSMOS']
     # process_samples('COSMOS')
     
@@ -117,7 +119,7 @@ def process_samples(field):
     
     # load in catalogs: <== specify column dtypes
     if field == 'COSMOS':
-        df = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/CANDELS_COSMOS_CATS/'+field+'_data2.csv',
+        df = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/CANDELS_COSMOS_CATS/'+field+'_data3.csv',
                         dtype={'ZSPEC_R':object})
         df = df.loc[ (df['LP_TYPE'] != 1) & (df['LP_TYPE'] != -99) & (df['MASS'] > (mass_lo)) & # (mass_lo-1)
             (df['FLAG_COMBINED'] == 0) & (df['SIG_DIFF'] > 0) & #(df['HSC_i_MAG_AUTO'] < 27) & (df['HSC_i_MAG_AUTO'] > 0)
@@ -151,7 +153,7 @@ def process_samples(field):
         #     df = df.rename(columns={'lp_MASS':'MASS','lp_ZPHOT_PEAK':'ZPHOT_PEAK'})
             
     else:
-        df = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/CANDELS_COSMOS_CATS/'+field+'_data2.csv',
+        df = pd.read_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/CANDELS_COSMOS_CATS/'+field+'_data3.csv',
                         dtype={'ZSPEC_R':object})
         df = df[ (df['CLASS_STAR'] < 0.9) & (df['PHOTFLAG'] == 0) & (df['MASS'] > mass_lo) & (df['MASS'] < 15) &
             (df['SIG_DIFF'] > 0) & (df['ZPHOT_PEAK'] > 0) ] 
@@ -175,7 +177,7 @@ def determine_pairs(df, field):
     df['z'] = df['ZPHOT_PEAK']
     if z_type == 'ps':
         df.loc[ df['ZBEST_TYPE'] == 's', 'z' ] = df['ZSPEC']
-        df.loc[ df['ZBEST_TYPE'] == 's', 'SIG_DIFF' ] = 0
+        df.loc[ df['ZBEST_TYPE'] == 's', 'SIG_DIFF' ] = 0.01
     
     # make definite redshift cut:
     all_df = df.loc[ (df['z'] > 0.5) & (df['z'] < 3.0) ]  ### ~~~ GOTTA BE CAREFUL WITH EDGES ~~~ ###
@@ -183,6 +185,9 @@ def determine_pairs(df, field):
     all_df = all_df.reset_index(drop=True)
     
     # calculate LX
+    # ### ~~~ SHUFFLE FX... ~~~ ###
+    # all_df['FX'] = np.random.permutation(all_df['FX'])
+    # print('FX shuffles')
     all_df['LX'] = ( all_df['FX'] * 4 * np.pi * ((cosmo.luminosity_distance(all_df['z']).to(u.cm))**2).value * 
                                                                 ((1+all_df['z'])**(gamma-2)) )
    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
@@ -191,6 +196,8 @@ def determine_pairs(df, field):
     # look at IR luminosities
     all_df['IR_AGN_DON'] = [0]*len(all_df)
     all_df['IR_AGN_STR'] = [0]*len(all_df)
+    
+    np.seterr(divide = 'ignore')
 
     all_df.loc[ (np.log10(all_df['IRAC_CH3_FLUX']/all_df['IRAC_CH1_FLUX']) >= 0.08) &
                (np.log10(all_df['IRAC_CH4_FLUX']/all_df['IRAC_CH2_FLUX']) >= 0.15) &
@@ -219,6 +226,9 @@ def determine_pairs(df, field):
                (all_df['IRAC_CH3_FLUX']/all_df['IRAC_CH3_FLUXERR'] < sig_det) | (all_df['IRAC_CH4_FLUX']/all_df['IRAC_CH4_FLUXERR'] < sig_det),
               ['IR_AGN_DON', 'IR_AGN_STR'] ] = 0
     
+    # CHANGE NUMPY ERROR TO TRY TO FIND BUG
+    np.seterr(divide = 'raise')
+        
 #     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
 #     print('Applying COSMOS mag cut...')
 #     all_df.loc[ (all_df['IRAC_CH1_ABMAG'] > 26) | (all_df['IRAC_CH2_ABMAG'] > 26) |
@@ -252,8 +262,10 @@ def determine_pairs(df, field):
     if duplicate_pairs == False:
         # get rid of duplicates in pair sample
         pair_df = pair_df[ (pair_df['mass_ratio'] >= 0) ]
+        
         sorted_idx_df = pd.DataFrame(np.sort((pair_df.loc[:,['prime_index','partner_index']]).values, axis=1), 
                                         columns=(pair_df.loc[:,['prime_index','partner_index']]).columns).drop_duplicates()
+        
         pair_df = pair_df.reset_index(drop=True)
         pair_df = pair_df.iloc[sorted_idx_df.index]
         # we only want pairs where the mass ratio is within 10
@@ -264,7 +276,7 @@ def determine_pairs(df, field):
         # true_pairs = pair_df[ (pair_df['kpc_sep'] <= max_sep*u.kpc) ] # <== I wouldn't actually even make this cut
         true_pairs = pair_df
         # we only want to consider pairs where the prime index is above our threshold <== now what do you do...
-        true_pairs = true_pairs.iloc[ np.where( np.array(all_df.loc[ true_pairs['prime_index'], 'MASS' ] > mass_lo) == True ) ]
+        # true_pairs = true_pairs.iloc[ np.where( np.array(all_df.loc[ true_pairs['prime_index'], 'MASS' ] > mass_lo) == True ) ]
         
     elif duplicate_pairs == True:
         # we only want pairs where the mass ratio is within 10
@@ -423,6 +435,13 @@ def determine_pairs(df, field):
     #### %%%%%%%%%%%%%%%%%%%%%%%% ####
     #### %%% EDIT %%%%%%%%%%%%%%% ####
     #### %%%%%%%%%%%%%%%%%%%%%%%% ####
+    
+    # # if indeed the bug is here, check how many cases partner_M > prime_mass and exit
+    # print('DRUMROLL PLEASE')
+    # print( len(gtrue_pairs.loc[ gtrue_pairs['partner_M'] > gtrue_pairs['prime_M'] ]) )
+    # sys.exit()
+    
+    
     gtrue_pairs = gtrue_pairs.loc[ gtrue_pairs['prime_M'] > 10 ].reset_index(drop=True)
     
     ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
@@ -437,7 +456,7 @@ def determine_pairs(df, field):
     pair_probs, pair_PdA = load_pdfs(gtrue_pairs, all_df)
     gtrue_pairs['pair_prob'] = pair_probs
     if bob_type == 'full':
-        gtrue_pairs = gtrue_pairs.loc[ gtrue_pairs['pair_prob'] > 0 ]
+        gtrue_pairs = gtrue_pairs.loc[ gtrue_pairs['pair_prob'] > pp_cut ] # > 0
     elif bob_type == 'randbob':
         gtrue_pairs = gtrue_pairs.loc[ gtrue_pairs['pair_prob'] >= 0 ]
     
@@ -467,7 +486,10 @@ def determine_pairs(df, field):
             all_df.loc[ i, 'all_pp'] = 0
         elif len(gal_match_probs) != 0: 
             all_df.loc[ i, 'all_pp'] = 1 - np.prod(1-gal_match_probs)
-        
+            
+    # print('saving all_df to look at all_pp')
+    # all_df.to_csv('/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/test_output/'+field+'_all_df.csv', index=False)
+    # sys.exit()
         
     # print('%%%%%%%%%%%%%%%%%%%%%')
     # print(len(all_df))
@@ -657,7 +679,7 @@ def load_pdfs(pair_df, iso_pool_df): # just load in the same iso_pool_df to make
 
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 
-def pdf_pll(i):
+def pdf_pll(i): # not used
         
     field = var_dict['field']
     idxs = chunked_idx_dict[field]
@@ -918,6 +940,7 @@ def conv_apples(pair_df, iso_pool_df):
         
     # throw the iso_pool df onto the universal dictionary for mp use:
     iso_pool_dict[field] = iso_pool_df
+    controlled_IDs[field] = np.zeros(len(pair_df))
     
     # begin the pooling
     print('Filling apple pool in {}'.format(field)) 
@@ -937,23 +960,61 @@ def conv_apples(pair_df, iso_pool_df):
     np.copyto(P_np, P_data)
     # Start the process p
     
+    # bug is in this pair:
+    # 242030 - 238673... memory error
+    # when you get to dM > 0.5 and DON'T have enough even in apple df, you then ask the code to search
+    # in a massive parameter space, to the point where to convolve 1 million pairs, for example, is not
+    # possible for memory...
+    # nothing found for 673025-687360
+    
+    # # STEPS: run this case alone and see how large that merger would be...
+    # # SOLUTION: when we reach the 'oops' warning, reset mass and z back to something much lower...
+    # var_dict['field'] = P_field
+    # var_dict['P'] = P
+    # var_dict['Pshape'] = P_shape
+    # var_dict['Pcols'] = P_cols
+    # # get the index of that pair:
+    # bad_idx = pair_df.index[ (pair_df['prime_ID'] == 673025) & (pair_df['partner_ID'] == 687360) ].to_list()[0]
+    # print('bad idx:', bad_idx)
+    # test = bobbing_pll(bad_idx)
+    # print('SUCCESSFUL TEST PASS......')
+    # ...
+    # ...
+    # Still a memory error... solution is just to change the Cp matching function to also adjust when it hits the reset
+    # but hopefully the cut_pp > 0.01 will work...............
+
+    ### ~~~ just try runing COSMOS in serial... ~~~ ###
     if bob_type == 'full':
         # Start the process pool and do the computation.
+        # add a manager for checklist:
+        # manager = multiprocessing.Manager()
+        # check_list_ug = manager.list(np.zeros(len(pair_df)))
+        
         with Pool(processes=num_procs, initializer=init_worker, initargs=(P, P_cols, P_shape, P_field)) as pool:
+        # with Pool(processes=num_procs, initargs=(var_dict, check_list)) as pool:
+            # add a manager for checklist:
             result = pool.map(bobbing_pll, range(P_shape[0]))
+            # result.get() # see if this catches an error -> map has get built in...
     elif bob_type == 'randbob':
         # Start the process pool and do the computation.
         with Pool(processes=num_procs, initializer=init_worker, initargs=(P, P_cols, P_shape, P_field)) as pool:
             result = pool.map(randbob_pll, np.array(pair_df['prime_ID'].unique()))
             
-    # print('CHECK HERE', os.getpid())
-            
     # join pool and clear all universal dictionaries used per field:
     pool.close()
     pool.join()
+    ### ~~~ just try runing COSMOS in serial... ~~~ ###
+
+    # for serialization
+    # result = []
+    # for i in tqdm(range(0,len(range(P_shape[0])))):
+    #     result.append(bobbing_pll(i))
+    # ... If this takes ages, just cut all pairs with Pp < 0.01 - well justified enough...
+
     iso_pool_dict.clear()
     PDF_dict.clear()
     var_dict.clear()
+    # controlled_IDs.clear()
     
     print('CHECK HERE DONE')
     
@@ -1044,6 +1105,9 @@ def init_worker(P, P_cols, P_shape, P_field):
     var_dict['Pshape'] = P_shape
     var_dict['Pcols'] = P_cols
     
+    # global check_list
+    # check_list = check_list_ug
+    
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 
 def byhand(dfs):
@@ -1064,12 +1128,28 @@ def byhand(dfs):
 
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 
-def bobbing_pll(i): 
+def PP_diff_func(x):
+    # input the value of Pp...
+    # I have already tuned what this function should be...
+    A = 5.24002529e-05
+    C = 1.54419221e-04
+    
+    return C*(1/(x+A)) + 0.05
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+
+
+def bobbing_pll(i): # seems that a log10 warning is raised when no isos are found at all
+    
+    # CHANGE NUMPY ERROR TO TRY TO FIND BUG # just in case...
+    np.seterr(divide = 'raise')
     
     # print('IN', i)
-    st = time.perf_counter()
+    # st = time.perf_counter()
     
+    # recover some variables:
     field = var_dict['field']
+    
     if field == 'COSMOS':
         dM_lim = 0.5
     else:
@@ -1113,50 +1193,35 @@ def bobbing_pll(i):
                        
     got = False
     good_old = False
+    report = False
+    catch_flag = False
     dz = base_dz
     dM = base_dM
     dE = base_dE
     dS = base_dS
     tried_arr = []
+    tries = 0
     # start = time.perf_counter()
+    
+    ### %%%%%%%%%% try to get this error message %%%%%%%%%%%% ###
+
     while got == False:
+        tries+=1
         iso1 = iso_pool_df.loc[ (np.abs(iso_pool_df['z']-z1) < dz) & (np.abs(iso_pool_df['MASS']-M1) < dM) &
                               (iso_pool_df['ID'] != ID1) & (iso_pool_df['ID'] != ID2) & (iso_pool_df['Quadrant'] == Qd) &
                                (np.abs(iso_pool_df[z_type+'_env']-E1) < dE) & 
-                               (np.abs(iso_pool_df['SIG_DIFF'] - SIG1) < dS), 
-                              ['ID','RA','DEC','MASS','LOGSFR_MED','z','LX','IR_AGN_DON','IR_AGN_STR',
-                              'IRAC_CH1_FLUX','IRAC_CH2_FLUX','IRAC_CH3_FLUX','IRAC_CH4_FLUX',
-                              'IRAC_CH1_FLUXERR','IRAC_CH2_FLUXERR','IRAC_CH3_FLUXERR','IRAC_CH4_FLUXERR',
-                              'IRAC_CH1_ABMAG','IRAC_CH2_ABMAG','IRAC_CH3_ABMAG','IRAC_CH4_ABMAG',
-                               z_type+'_env'] ] 
-        iso1 = iso1.rename(columns={'RA':'RA1', 'DEC':'DEC1', 'z':'z1', 'MASS':'MASS1', 'LOGSFR_MED':'SFR1',
-                                    'LX':'LX1', 'IR_AGN_DON':'IR_AGN_DON1', 'IR_AGN_STR':'IR_AGN_STR1',
-                                   'IRAC_CH1_FLUX':'IRAC_CH1_FLUX1', 'IRAC_CH2_FLUX':'IRAC_CH2_FLUX1',
-                                   'IRAC_CH3_FLUX':'IRAC_CH3_FLUX1', 'IRAC_CH4_FLUX':'IRAC_CH4_FLUX1',
-                                   'IRAC_CH1_FLUXERR':'IRAC_CH1_FLUXERR1', 'IRAC_CH2_FLUXERR':'IRAC_CH2_FLUXERR1',
-                                   'IRAC_CH3_FLUXERR':'IRAC_CH3_FLUXERR1', 'IRAC_CH4_FLUXERR':'IRAC_CH4_FLUXERR1',
-                                   'IRAC_CH1_ABMAG':'IRAC_CH1_ABMAG1','IRAC_CH2_ABMAG':'IRAC_CH2_ABMAG1',
-                                   'IRAC_CH3_ABMAG':'IRAC_CH3_ABMAG1','IRAC_CH4_ABMAG':'IRAC_CH4_ABMAG1',
-                                   z_type+'_env':'ENV1'})
+                               (np.abs(np.log10(iso_pool_df['SIG_DIFF']) - np.log10(SIG1)) < dS), 
+                              ['ID','RA','DEC','MASS','z', 'SIG_DIFF','LX','IR_AGN_DON', z_type+'_env'] ] 
+        iso1 = iso1.rename(columns={'RA':'RA1', 'DEC':'DEC1', 'z':'z1', 'SIG_DIFF':'SIG1', 'MASS':'MASS1',
+                                    'LX':'LX1', 'IR_AGN_DON':'IR_AGN_DON1', z_type+'_env':'ENV1'})
         iso2 = iso_pool_df.loc[ (np.abs(iso_pool_df['z']-z2) < dz) & (np.abs(iso_pool_df['MASS']-M2) < dM) &
                               (iso_pool_df['ID'] != ID1) & (iso_pool_df['ID'] != ID2) & (iso_pool_df['Quadrant'] == Qd) & 
                                (np.abs(iso_pool_df[z_type+'_env']-E2) < dE) & 
-                               (np.abs(iso_pool_df['SIG_DIFF'] - SIG2) < dS),
-                              ['ID','RA','DEC','MASS','LOGSFR_MED','z','LX','IR_AGN_DON','IR_AGN_STR',
-                              'IRAC_CH1_FLUX','IRAC_CH2_FLUX','IRAC_CH3_FLUX','IRAC_CH4_FLUX',
-                              'IRAC_CH1_FLUXERR','IRAC_CH2_FLUXERR','IRAC_CH3_FLUXERR','IRAC_CH4_FLUXERR',
-                              'IRAC_CH1_ABMAG','IRAC_CH2_ABMAG','IRAC_CH3_ABMAG','IRAC_CH4_ABMAG',
-                              z_type+'_env'] ]
-        iso2 = iso2.rename(columns={'RA':'RA2', 'DEC':'DEC2', 'z':'z2', 'MASS':'MASS2', 'LOGSFR_MED':'SFR2',
-                                    'LX':'LX2', 'IR_AGN_DON':'IR_AGN_DON2', 'IR_AGN_STR':'IR_AGN_STR2',
-                                   'IRAC_CH1_FLUX':'IRAC_CH1_FLUX2', 'IRAC_CH2_FLUX':'IRAC_CH2_FLUX2',
-                                   'IRAC_CH3_FLUX':'IRAC_CH3_FLUX2', 'IRAC_CH4_FLUX':'IRAC_CH4_FLUX2',
-                                   'IRAC_CH1_FLUXERR':'IRAC_CH1_FLUXERR2', 'IRAC_CH2_FLUXERR':'IRAC_CH2_FLUXERR2',
-                                   'IRAC_CH3_FLUXERR':'IRAC_CH3_FLUXERR2', 'IRAC_CH4_FLUXERR':'IRAC_CH4_FLUXERR2',
-                                   'IRAC_CH1_ABMAG':'IRAC_CH1_ABMAG2','IRAC_CH2_ABMAG':'IRAC_CH2_ABMAG2',
-                                   'IRAC_CH3_ABMAG':'IRAC_CH3_ABMAG2','IRAC_CH4_ABMAG':'IRAC_CH4_ABMAG2',
-                                   z_type+'_env':'ENV2'})
-        
+                               (np.abs(np.log10(iso_pool_df['SIG_DIFF']) - np.log10(SIG2)) < dS),
+                              ['ID','RA','DEC','MASS','z', 'SIG_DIFF','LX','IR_AGN_DON', z_type+'_env'] ]
+        iso2 = iso2.rename(columns={'RA':'RA2', 'DEC':'DEC2', 'z':'z2', 'SIG_DIFF':'SIG2', 'MASS':'MASS2',
+                                    'LX':'LX2', 'IR_AGN_DON':'IR_AGN_DON2', z_type+'_env':'ENV2'})
+
         # print(iso1.loc[:,['MASS1', 'z1', 'SIG_DIFF','ENV1']])
         # print(M1, z1, SIG1, E1)
         # sys.exit()
@@ -1168,6 +1233,8 @@ def bobbing_pll(i):
         #     dM = dM + 0.03
         #     continue
 
+        if catch_flag == True:
+            print('CAUGHT', len(apple_df))
         # create unique pair strings:
         apple_df['pair_str'] = (apple_df['ID1'].astype(int)).astype(str)+'+'+(apple_df['ID2'].astype(int)).astype(str)
         # AND a flag on if it passes the tests below...
@@ -1178,8 +1245,8 @@ def bobbing_pll(i):
         if len(apple_df) == 0:
             dz = dz + 0.03
             dM = dM + 0.03
-            dE = dE + 2
-            dS = dS + 0.125
+            dE = dE + 1
+            dS = dS + 0.05
             continue
 
         # make sure a separation cut is adequite:
@@ -1188,36 +1255,79 @@ def bobbing_pll(i):
         apple_df['arc_sep'] = xCOR.separation(yCOR).arcsecond
 
         # if we are working with spec-z's, we gotta interpolate these...
-        apple_df['Cp'] = Convdif(z_01, PDF_array[apple_df['ID1'],1:], PDF_array[apple_df['ID2'],1:], dv_lim=max_dv)
-        # apple_df = apple_df.loc[ apple_df['Cp'] > 0 ] #### EDIT 
+        # count the length of Cp and if its more than 50,000, chunk into 10,000 bits
+        merge_length = len(apple_df)
+        if merge_length < 50000:
+            apple_df['Cp'] = Convdif(z_01, PDF_array[apple_df['ID1'],1:], PDF_array[apple_df['ID2'],1:], dv_lim=max_dv)
+        else:
+            # loop through and calculate Cp in chunks
+            print('Chunking up Cp calculation for pair {0}-{1} into {2} chunks'.format( ID1, ID2, (merge_length//10000)+1 ))
+            # initialize an empty array to put Cps into
+            Cp_chunks = np.zeros( merge_length )
+            Ch_chunks_check = np.zeros( merge_length )
+            N_chunks = merge_length // 10000
+            for j in range(N_chunks+1):
+                Cp_ch = Convdif(z_01, PDF_array[apple_df.loc[ j*10000:(j+1)*10000 , 'ID1'],1:], 
+                                PDF_array[apple_df.loc[ j*10000:(j+1)*10000, 'ID2'],1:], dv_lim=max_dv)
+                Cp_chunks[j*10000:((j+1)*10000)+1] = Cp_ch[:,0] #shape = [10001,1]
+                ### BEWARE LOC INDEX ISSUES AT END OF ARRAY ###
+                Ch_chunks_check[j*10000:((j+1)*10000)+1] = 1
+            # quick check everyone was got:
+            if np.any(Ch_chunks_check) == 0:
+                print('CHUNK MISSED SOME')
+            # now add the chunked Cp values into the df
+            apple_df['Cp'] = Cp_chunks
+            # final step is to pray
 
-        if np.log10(Pp) >= -2: ### ~~~ WILL HAVE TO MESS AROUND WITH THESE PARAMETERS ~~~ ###
-            apple_df2 = apple_df.loc[ ((np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.05) |
-                                       (np.abs(apple_df['Cp'] - Pp) < 0.01)) & (apple_df['arc_sep'] > max_R_kpc) &
-                                     (apple_df['ID1'] != apple_df['ID2']) ].reset_index(drop=True)
-            # add a second tier here to loosen who gets chosen, that way after a certain amount of attempts we just choose the best
-            apple_df.loc[  ((np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.5) | ## * ##
-                                       (np.abs(apple_df['Cp'] - Pp) < 0.01)) & (apple_df['arc_sep'] > max_R_kpc) &
-                                     (apple_df['ID1'] != apple_df['ID2']), 'reuse_flag' ] = 1
-        # add another tier for extremely small probabilities
-        elif np.log10(Pp) < -8:
-            apple_df2 = apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 4) & 
-                                     (apple_df['arc_sep'] > max_R_kpc) &
-                                     (apple_df['ID1'] != apple_df['ID2']) ].reset_index(drop=True)
-            apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 4) & (apple_df['arc_sep'] > max_R_kpc) &
-                                     (apple_df['ID1'] != apple_df['ID2']), 'reuse_flag' ] = 1
-        elif np.log10(Pp) < -2 and np.log10(Pp) > -3:
-            apple_df2 = apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.5) & 
-                                     (apple_df['arc_sep'] > max_R_kpc) &
-                                     (apple_df['ID1'] != apple_df['ID2']) ].reset_index(drop=True)
-            apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.5) & (apple_df['arc_sep'] > max_R_kpc) &
-                                     (apple_df['ID1'] != apple_df['ID2']), 'reuse_flag' ] = 1
-        else:                                                                          # maybe too strict...
-            apple_df2 = apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 1) & 
-                                     (apple_df['arc_sep'] > max_R_kpc) &
-                                     (apple_df['ID1'] != apple_df['ID2']) ].reset_index(drop=True)
-            apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 1) & (apple_df['arc_sep'] > max_R_kpc) &
-                                     (apple_df['ID1'] != apple_df['ID2']), 'reuse_flag' ] = 1
+        ### --- WHAT IS GOING ON WITH LOG --- ### 
+        # I think it's an issue in Convdif?
+        # check if apple_df returns a NaN value?
+        if np.any(np.isinf(apple_df['Cp'])) == True:
+            print('Convdif produced in infinite for pair {0}, {1}'.format([ID1, ID2]))
+            print(apple_df)
+            report=True
+        if np.any(np.isnan(apple_df['Cp'])) == True:
+            print('Convdif produced in infinite for pair {0}, {1}'.format([ID1, ID2]))
+            print(apple_df)
+            report=True
+
+        apple_df = apple_df.loc[ apple_df['Cp'] > 0 ]
+
+        apple_df2 = apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < PP_diff_func(Pp)) &
+                                                 (apple_df['arc_sep'] > max_R_kpc) & 
+                                                 (apple_df['ID1'] != apple_df['ID2']) ].reset_index(drop=True)
+
+        apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < PP_diff_func(Pp)) & 
+                                                 (apple_df['arc_sep'] > max_R_kpc) &
+                                                 (apple_df['ID1'] != apple_df['ID2']), 'reuse_flag' ] = 1
+
+#             if np.log10(Pp) >= -2: ### ~~~ WILL HAVE TO MESS AROUND WITH THESE PARAMETERS ~~~ ###
+#                 apple_df2 = apple_df.loc[ ((np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.05) |
+#                                            (np.abs(apple_df['Cp'] - Pp) < 0.01)) & (apple_df['arc_sep'] > max_R_kpc) &
+#                                          (apple_df['ID1'] != apple_df['ID2']) ].reset_index(drop=True)
+#                 # add a second tier here to loosen who gets chosen, that way after a certain amount of attempts we just choose the best
+#                 apple_df.loc[  ((np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.5) | ## * ##
+#                                            (np.abs(apple_df['Cp'] - Pp) < 0.01)) & (apple_df['arc_sep'] > max_R_kpc) &
+#                                          (apple_df['ID1'] != apple_df['ID2']), 'reuse_flag' ] = 1
+#             # add another tier for extremely small probabilities
+#             elif np.log10(Pp) < -8:
+#                 apple_df2 = apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 4) & 
+#                                          (apple_df['arc_sep'] > max_R_kpc) &
+#                                          (apple_df['ID1'] != apple_df['ID2']) ].reset_index(drop=True)
+#                 apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 4) & (apple_df['arc_sep'] > max_R_kpc) &
+#                                          (apple_df['ID1'] != apple_df['ID2']), 'reuse_flag' ] = 1
+#             elif np.log10(Pp) < -2 and np.log10(Pp) > -3:
+#                 apple_df2 = apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.5) & 
+#                                          (apple_df['arc_sep'] > max_R_kpc) &
+#                                          (apple_df['ID1'] != apple_df['ID2']) ].reset_index(drop=True)
+#                 apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 0.5) & (apple_df['arc_sep'] > max_R_kpc) &
+#                                          (apple_df['ID1'] != apple_df['ID2']), 'reuse_flag' ] = 1
+#             else:                                                                          # maybe too strict...
+#                 apple_df2 = apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 1) & 
+#                                          (apple_df['arc_sep'] > max_R_kpc) &
+#                                          (apple_df['ID1'] != apple_df['ID2']) ].reset_index(drop=True)
+#                 apple_df.loc[ (np.abs(np.log10(apple_df['Cp']) - np.log10(Pp)) < 1) & (apple_df['arc_sep'] > max_R_kpc) &
+#                                          (apple_df['ID1'] != apple_df['ID2']), 'reuse_flag' ] = 1
 
         # add pair information:
         apple_df2['P_ID1'] = np.array([ID1]*len(apple_df2), dtype=int)
@@ -1226,21 +1336,47 @@ def bobbing_pll(i):
                                                 # Cp could theoretically be 0... causing log10 of 0
         # organize to get best fit:  ### may need to think how the Cp dif is made (log or not), doubt it'd matter tho ###
         apple_df2['dif'] = (10*(np.log10(apple_df2['Cp']) - np.log10(Pp))**2 + 
-                                (apple_df2['z1'] - z1)**2 + (apple_df2['MASS1'] - M1)**2 + 0.5*(apple_df2['ENV1'] - E1)**2 +
-                            (apple_df2['z2'] - z2)**2 + (apple_df2['MASS2'] - M2)**2 + 0.5*(apple_df2['ENV2'] - E2)**2)
-        # now sort on this
-        # add good values to this if they exist:
-        if good_old == True:
-            apple_df2 = good_old_df
-            apple_df2 = pd.concat(apple_df2, good_old_df, ignore_index=True) 
-        
+                                (apple_df2['z1'] - z1)**2 + (apple_df2['MASS1'] - M1)**2 + 0.1*(apple_df2['ENV1'] - E1)**2 +
+                            (np.log10(apple_df2['SIG1']) - np.log10(SIG1))**2 +
+                            (apple_df2['z2'] - z2)**2 + (apple_df2['MASS2'] - M2)**2 + 0.1*(apple_df2['ENV2'] - E2)**2 +
+                            (np.log10(apple_df2['SIG2']) - np.log10(SIG2))**2)
+    
+        # # now sort on this
+        # # add good values to this if they exist:
+        # if good_old == True:
+        #     apple_df2 = good_old_df
+        #     apple_df2 = pd.concat(apple_df2, good_old_df, ignore_index=True) 
+
         apple_df2.sort_values(by=['dif'], inplace=True, ascending=True, ignore_index=True) # this resets the index
 
-        # print(field, ID1, M1, z1, ID2, M2, z2, Pp, np.max(apple_df['Cp']), len(apple_df), len(apple_df2))
+        # if we have repeat ID1s or ID2s for examples, we want to ignore these # essentially just like chooseing the same 
+        apple_df2 = apple_df2.drop_duplicates(['ID1'])
+        apple_df2 = apple_df2.drop_duplicates(['ID2'])
+        apple_df2 = apple_df2.reset_index(drop=True)
+        # add a simple integer count
+        # apple_df2['NUM'] = np.linspace(1, len(apple_df2), len(apple_df2), dtype=int)
+
+        # finally, if we have inverse pairs we need to get rid of these...
+        # apple_df3 = pd.DataFrame(np.sort((apple_df2.loc[:,['ID1','ID2']]).values, axis=1), 
+        #                             columns=(apple_df2.loc[:,['ID1','ID2']]).columns).drop_duplicates()
+        
+        sort_idx = np.argsort((apple_df2.loc[:,['ID1','ID2']]).values, axis=1)
+        arr = np.array(apple_df2.loc[:, ['ID1','ID2']].values)
+        arr_ysort = np.take_along_axis(arr, sort_idx, axis=1)
+        # unique at axis 0 to get rid of duplicates
+        uniq_arr, uniq_idx = np.unique(arr_ysort, return_index=True, return_inverse=False, axis=0)
+        # return the unique pairing
+        uniq_p = arr[np.sort(uniq_idx)]
+        apple_df3 = pd.DataFrame( uniq_p, columns=(apple_df2.loc[:,['ID1','ID2']]).columns )
+        apple_df3['pair_str'] = (apple_df3['ID1'].astype(int)).astype(str)+'+'+(apple_df3['ID2'].astype(int)).astype(str)
+        apple_df2 = apple_df2.loc[ apple_df2['pair_str'].isin(apple_df3['pair_str']) == True ].reset_index(drop=True)
+                
+        # good luck...
 
         # take the top pair and add it to an array:
         if len(apple_df2) >= N_controls:   ### ~~~ POSSIBLE THE TWO CHOSEN PAIRS HAVE OVERLAPPING GALAXIES ~~~ ###
             control_df = apple_df2.iloc[:N_controls]
+            # print('Success at attempt', tries, Pp)
             # controls.append(apple_df2.iloc[:N_controls])
             # give me a progress message every 500 iterations
             # if np.any(milestones==(i+1)) == True:
@@ -1255,35 +1391,53 @@ def bobbing_pll(i):
             tried_arr = np.concatenate( (tried_arr, apple_df.loc[ apple_df['reuse_flag'] == 0, 'pair_str' ]) ) 
             dz = dz + 0.03
             dM = dM + 0.03 ####
-            dE = dE + 2
-            dS = dS + 0.125
-            if dM > dM_lim: # set this on mass instead...
-                print('search has exceeded appropriate mass threshold...')
-                print('to avoid bias, we are going to select the closest matches thus far...')
-                print('BUG OUT IN', os.getpid(), ID1, M1, z1, E1, ID2, M2, z2, E2, Pp)
-                # print('but we tried...', np.sort(apple_df['Cp'])[-3:])
-                # print('good selections in apple_df2 =', apple_df2)
-                # just take them...
-                print('just gonna take the top choices for now...')
-                # add pair information:
-                apple_df['P_ID1'] = np.array([ID1]*len(apple_df), dtype=int)
-                apple_df['P_ID2'] = np.array([ID2]*len(apple_df), dtype=int)
-                apple_df['Pp'] = np.array([Pp]*len(apple_df), dtype=float)
-                
-                apple_df['dif'] = (10*(np.log10(apple_df['Cp']) - np.log10(Pp))**2 + 
-                                (apple_df['z1'] - z1)**2 + (apple_df['MASS1'] - M1)**2 + 0.5*(apple_df['ENV1'] - E1)**2 +
-                            (apple_df['z2'] - z2)**2 + (apple_df['MASS2'] - M2)**2 + 0.5*(apple_df['ENV2'] - E2)**2)
-                # now sort on this
-                apple_df = apple_df.loc[ (apple_df['ID1'] != apple_df['ID2']) & 
-                                        (apple_df['arc_sep'] > max_R_kpc) ].reset_index(drop=True)
-                apple_df.sort_values(by=['dif'], inplace=True, ascending=True, ignore_index=True) # this resets the index
-                print('settled for')
-                print(apple_df.loc[ :10, ['pair_str','z1','z2', 'Cp','dif', 'P_ID1','P_ID2', 'Pp'] ])
-                print(ID1, ID2, Pp)
-                control_df = apple_df.iloc[:N_controls]
-                print(control_df)
-                got = True
-                
+            dE = dE + 1
+            dS = dS + 0.05
+            # add some kind of flag if there really aren't any good matches in Cp...
+            if dM > 0.6:
+                print('dM exceeded 0.6 for pair {0}-{1}'.format(ID1, ID2))
+                report = True
+
+#                 if dM > dM_lim:
+#                     print('search has exceeded appropriate mass threshold...')
+#                     print('to avoid bias, we are going to select the closest matches thus far...')
+#                     print('BUG OUT IN', os.getpid(), ID1, M1, z1, E1, ID2, M2, z2, E2, Pp)
+#                     # print('but we tried...', np.sort(apple_df['Cp'])[-3:])
+#                     # print('good selections in apple_df2 =', apple_df2)
+#                     # just take them...
+#                     print('just gonna take the top choices for now...')
+#                     # add pair information:
+#                     apple_df['P_ID1'] = np.array([ID1]*len(apple_df), dtype=int)
+#                     apple_df['P_ID2'] = np.array([ID2]*len(apple_df), dtype=int)
+#                     apple_df['Pp'] = np.array([Pp]*len(apple_df), dtype=float)
+
+#                     apple_df['dif'] = (10*(np.log10(apple_df['Cp']) - np.log10(Pp))**2 + 
+#                                     (apple_df['z1'] - z1)**2 + (apple_df['MASS1'] - M1)**2 + 0.5*(apple_df['ENV1'] - E1)**2 +
+#                                 (apple_df['z2'] - z2)**2 + (apple_df['MASS2'] - M2)**2 + 0.5*(apple_df['ENV2'] - E2)**2)
+#                     # now sort on this
+#                     apple_df = apple_df.loc[ (apple_df['ID1'] != apple_df['ID2']) & 
+#                                             (apple_df['arc_sep'] > max_R_kpc) ].reset_index(drop=True)
+#                     apple_df.sort_values(by=['dif'], inplace=True, ascending=True, ignore_index=True) # this resets the index
+#                     print('settled for')
+#                     # print(apple_df.loc[ :10, ['pair_str','z1','z2', 'Cp','dif', 'P_ID1','P_ID2', 'Pp'] ])
+#                     apple_df = apple_df.drop_duplicates(['ID1'])
+#                     apple_df = apple_df.drop_duplicates(['ID2'])
+#                     print(apple_df.loc[ :, ['ID1', 'ID2', 'Cp', 'P_ID1', 'P_ID2', 'Pp'] ])
+
+#                     if len(apple_df) < N_controls:
+#                         print('oops...')
+#                         report = True
+#                         # sys.exit()
+#                         dS = dS + 0.5
+#                         dz = base_dz # need to once with base masses then need to groe exponentially...
+#                         dM = base_dM # if I chunk up the convdif then it shouldn't be a problem regardless... 
+#                         dE = base_dE # unless memory issue is merge itself.. 
+#                         # catch_flag = True
+#                     else:
+#                         print('got it!', tries, Pp)
+#                         control_df = apple_df.iloc[:N_controls]
+#                         got = True
+
 #                 # should save some that actually match the criteria before switching regions:
 #                 N_good = len(apple_df2)
 #                 if N_good > 0:
@@ -1292,7 +1446,7 @@ def bobbing_pll(i):
 #                     print(good_old_df)
 #                     # N_controls = N_controls - N_good
 #                     good_old = True
-                
+
 #                 # take out this Qd from the list
 #                 Qd_old = Qd
 #                 n_Qds = all_Qds[np.where(all_Qds != Qd)[0]]
@@ -1304,36 +1458,75 @@ def bobbing_pll(i):
 #                 print('moving from Q{0} to Q{1}'.format(Qd_old, Qd)) 
 #                 # print('length test:', len(n_Qds))
 #                 st = time.perf_counter()
-                
-            # tell me if it's searched over everything and found nothing:
-            if ((z1 + dz > 3) and (z1 - dz < 0.5)) or ((z2 + dz > 3) and (z2 - dz < 0.5)):
-                print('z FAIL -> NOTHING IN RANGE', ID1, M1, z1, E1, ID2, M2, z2, E2)
-            if ((M1 + dM > 12) and (M1 - dM < mass_lo)) or ((M2 + dM > 12) and (M2 - dM < mass_lo)):
-                print('M FAIL -> NOTHING IN RANGE', ID1, M1, z1, E1, ID2, M2, z2, E2)
-            # if dz > 0.5:
-            #     print('dz exceeds 0.5', field, ID1, M1, z1, ID2, M2, z2, Pp, np.max(apple_df['Cp']), len(apple_df), len(apple_df2))
+
+            # # tell me if it's searched over everything and found nothing:
+            # if ((z1 + dz > 3) and (z1 - dz < 0.5)) or ((z2 + dz > 3) and (z2 - dz < 0.5)):
+            #     print('z FAIL -> NOTHING IN RANGE', ID1, M1, z1, E1, ID2, M2, z2, E2)
+            # if ((M1 + dM > 12) and (M1 - dM < mass_lo)) or ((M2 + dM > 12) and (M2 - dM < mass_lo)):
+            #     print('M FAIL -> NOTHING IN RANGE', ID1, M1, z1, E1, ID2, M2, z2, E2)
+            # # if dz > 0.5:
+            # #     print('dz exceeds 0.5', field, ID1, M1, z1, ID2, M2, z2, Pp, np.max(apple_df['Cp']), len(apple_df), len(apple_df2))
 
 
     # # combine all control_dfs into one and save for this field:
     # # controls is a list of a 2 index dfs, so need to combine these all\
     # control_df = pd.DataFrame( np.concatenate(controls), columns=pd.DataFrame(controls[0]).columns )
     # # add field information
-    
+
     # print(dM)
     # try removing pait str and add in post: #
     control_df = control_df.drop(columns={'pair_str'})
     # control_df['field'] = [field]*len(control_df)
-    
+
     # print('Process {} complete. Returning...'.format(os.getpid()))
 #     if save == True:
 #         # save the field df as a csv
 #         control_df.to_csv(conv_PATH+'control_output/control_N-'+str(N_controls)+'_ztype-'+z_type+'_'+field+'_'+date+'.csv', index=False)
 #         print('Control df saved in {}'.format(field))
-            
+
        # if I parallelize this, I would need to return each processor's controls and join them IN ORDER      
-                
+
     # print('Apples Bobbed:', i, ID1, ID2)
+
+    if report == True:
+        print('~~ Made it for Cp = 0 ~~',  ID1, ID2, Pp)
+        print(control_df)
+
+    # cache successful ID:
+    # check_list[i] = 1
+    # print('heo')
+    # check_list_db = list(check_list)
+    # print('heo2')
+    # print(check_list_db)
+    # sys.exit()
+    # print(sum(check_list_db))
+    # run a test on successful IDs - how many are completed?
+    # print('NUMBER COMPLETED:', np.sum(controlled_IDs[field] / len(controlled_IDs[field])))
+    # remaining_IDXs = np.where(controlled_IDs[field] == 0)[0]
+#         print('hi.........')
+#         num_left = len(check_list) - np.sum(check_list) # don't like to do the calculation...
+#         print('hi...')
+#         print(np.sum(check_list), len(check_list))
+#         if num_left < 100:
+
+#             UN_PATH = '/nobackup/c1029594/CANDELS_AGN_merger_data/agn_merger_output/conv_prob/UNMATCHED/'
+#             print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+#             print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+#             # simply save the remaining controlled_IDs:
+#             # save np array
+#             np.savetxt(UN_PATH+field+'_'+str(num_left)+'_UNCONTROLLED.txt', controlled_IDs[field], fmt='%d')
+#             # print(ID1 = pair_arr[i, np.where(var_dict['Pcols'] == 'prime_ID')][0][0])
+#             print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~ SAVED ~~~~~~~~~~~~~~~~~~~~~~~~~')
+#             print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+
     return control_df
+
+    # except:
+    #     # Put all exception text into an exception and raise that
+    #     print('FAILED')
+    #     print("".join(traceback.format_exception(*sys.exc_info())))
+    #     print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+    #     raise Exception("".join(traceback.format_exception(*sys.exc_info())))
         
 
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
